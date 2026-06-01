@@ -32,10 +32,12 @@ This plan places emphasis on:
 
 - Node.js 20+
 - TypeScript
+- `npm` as the primary installation and distribution channel
 - `commander` for CLI parsing
 - `zod` for config and input validation
 - `vitest` for tests
 - `fast-check` integrated with `vitest` for property-based testing of stateful behavior and invariants
+- `esbuild` for producing an optional single-file Node.js distribution artifact
 - built-in `child_process` for subprocess execution
 
 ### Dependency Classes
@@ -65,6 +67,17 @@ External executables by capability:
 - `connect` and `cp` require the AWS Session Manager plugin because they depend on SSM session features
 - `cp` additionally requires local `ssh` and `scp`
 - `cp` additionally requires the remote instance to run `sshd` on port 22 and provide `sh`, `mv`, and `rm`
+
+### Distribution and Installation
+
+- the primary supported distribution and installation path is via `npm`
+- the package must install cleanly through `npm` and expose the `devbox` CLI in the standard Node.js way
+- the project must also support compilation to a single JavaScript output file at `dist/devbox.js`
+- the generated single-file artifact must begin with the exact shebang `#!/usr/bin/env node`
+- the generated single-file artifact must be directly executable as a CLI on POSIX systems
+- the generated single-file artifact must run under Node.js 20+ without requiring the TypeScript source tree at runtime
+- the single-file artifact is an additional supported distribution format, not the primary installation path
+- both the `npm`-installed CLI and the single-file artifact must preserve the same CLI behavior, exit codes, stdout contracts, and stderr contracts
 
 ### References
 
@@ -152,6 +165,17 @@ This helps captured typing mistakes, but doesn't break `devbox` if AWS changes t
 
 - regex: `^i-[0-9a-f]{8,17}$`
 
+### Remote Path Rules
+
+Applies to `devbox cp <local> <remote>`.
+
+- remote path must be non-empty after trimming
+- remote path must not contain ASCII control characters (bytes `0x00`-`0x1F`, `0x7F`)
+- remote path must not contain null bytes
+- these restrictions are validated before any transport operation begins
+- rejection produces `ValidationError` with a message identifying the offending character class
+- this prevents shell injection vectors that are not fully mitigated by POSIX single-quote escaping alone, especially control characters and embedded newlines
+
 ### Required Tags
 
 These must be present and non-empty after merge:
@@ -201,6 +225,7 @@ All functions clearly document their preconditions, postconditions, and invarian
 - dispatch commands
 - format stdout and stderr
 - map errors to fixed exit codes
+- provide a build and packaging entrypoint that supports standard `npm` distribution and a bundled single-file Node.js executable script
 
 2. Domain layer
 - validate aliases, templates, local files, and command preconditions
@@ -245,6 +270,10 @@ src/
     aws-cli.ts
     ssh-cli.ts
     config-store.ts
+build/
+  esbuild.ts
+dist/
+  devbox.js
 test/
 ```
 
@@ -256,30 +285,47 @@ All mutating commands use the same local-write algorithm:
 
 1. create `~/.config` if missing
 2. acquire an advisory lock file adjacent to the config using exclusive create
-3. read and validate current config, or synthesize first-run config if missing
-4. compute the full next config in memory
-5. write the full JSON payload to a temp file in the same directory
-6. `fsync` the temp file
-7. rename the temp file over the target file
-8. best-effort `fsync` the containing directory on platforms that support it
-9. release the lock file
+3. if the lock already exists, inspect it for staleness before rejecting the mutation
+4. read and validate current config, or synthesize first-run config if missing
+5. compute the full next config in memory
+6. write the full JSON payload to a temp file in the same directory
+7. `fsync` the temp file
+8. rename the temp file over the target file
+9. best-effort `fsync` the containing directory on platforms that support it
+10. release the lock file
+
+### Stale Lock Detection
+
+Before rejecting a held advisory lock, the config store performs best-effort staleness detection:
+
+1. read the PID from the lock file
+2. if the PID is missing or not a valid integer, treat the lock as stale
+3. if the PID does not correspond to a running process, treat the lock as stale
+4. if the lock file `mtime` is older than 5 minutes, treat the lock as stale regardless of PID liveness
+5. if the lock is determined to be stale, remove it and retry lock acquisition once
+6. if the lock is held by a live, recent process, reject the mutation with `ConfigError`
+
+This detection is best-effort and does not upgrade the locking model into distributed or crash-proof consensus. The tool still relies on a single local writer assumption.
 
 ### Config Store Preconditions
 
 - mutating commands require write permission to `~/.config`
-- mutating commands fail fast if the advisory lock already exists
+- mutating commands fail fast only when the advisory lock is held by a live, recent process
+- stale locks left by crashed or abandoned processes are recovered automatically
 
 ### Config Store Postconditions
 
 - successful mutation leaves a schema-valid JSON file at the target path
 - failed mutation leaves the previously committed config unchanged
 - lock files are removed on normal completion and best-effort removed on failure
+- stale locks from prior crashed invocations do not permanently block future mutations
 
 ### Config Store Invariants
 
 - no committed config file contains partial JSON
 - the tool assumes a single writer; concurrent mutating invocations are rejected rather than merged
 - durability guarantee is atomic replacement under normal process failure, not distributed consensus or multi-host locking
+- advisory lock recovery must never remove a lock held by a live, recent process
 
 ---
 
@@ -287,6 +333,7 @@ All mutating commands use the same local-write algorithm:
 
 - subprocesses must be invoked with argv arrays, never shell-interpolated command strings
 - when `cp` invokes remote shell commands over SSH, remote paths must be quoted conservatively for POSIX `sh`
+- remote paths passed to SSH commands must be validated for control characters before quoting and transmission; quoting alone is not sufficient defense against all injection vectors
 - stderr may include AWS CLI details, but secrets and local file contents must not be echoed back in errors
 - instance IDs, aliases, account IDs, and regions may be logged because they are operational identifiers, not secrets
 - destructive AWS operations must be explicit; `rm` never terminates unless `--terminate` is passed
@@ -489,7 +536,7 @@ Failure stderr contracts:
 
 **Postconditions**
 - prints tracked aliases from local config
-- if AWS is available, enriches rows with instance type and live EC2 state
+- if AWS is available, enriches rows with instance type and live EC2 state using batched `describe-instances` calls rather than one call per alias
 - if AWS is unavailable, still prints aliases with state shown as `unknown`
 - marks at most one current alias
 - does not mutate config
@@ -501,6 +548,14 @@ Failure stderr contracts:
 **Invariants**
 - only aliases from local config are listed
 - missing config is treated as empty state
+
+**AWS enrichment strategy**
+- `list` collects all tracked instance IDs and issues a single `aws ec2 describe-instances` call for the full set when possible
+- if the tracked set exceeds AWS CLI per-call limits, `list` splits the request into bounded batches
+- instances returned by AWS are enriched with live state and instance type
+- tracked instance IDs omitted from an otherwise successful AWS response are shown as `stale`
+- if a full enrichment batch fails because AWS is unavailable, credentials are missing, or the local `aws` executable is absent, `list` still succeeds and shows all rows as `unknown`
+- the enrichment algorithm minimizes API calls and reduces the chance of throttling relative to one-call-per-alias behavior
 
 ## `devbox init <alias> <template-file>`
 
@@ -699,6 +754,7 @@ Failure stderr contracts:
 - local `ssh` and `scp` executables are installed
 - local SSH configuration and credentials can authenticate to the target instance through the SSM tunnel
 - remote path is non-empty and absolute or shell-resolvable by the remote POSIX shell
+- remote path contains no ASCII control characters or null bytes
 - destination parent directory is writable by the SSH user used for transfer
 
 **Postconditions**
@@ -746,6 +802,8 @@ Applies only to AWS-dependent commands:
 - failed local mutations do not corrupt the last committed config
 - stdout and stderr follow the documented command contracts
 - local and AWS divergence is reported explicitly when it cannot be prevented
+- the project supports standard installation via `npm`
+- the project can also be built into a single executable JavaScript file with the required Node shebang
 
 ## Global Invariants
 
@@ -755,6 +813,8 @@ Applies only to AWS-dependent commands:
 - `current` is absent or references an existing alias
 - every stored `instanceId` matches EC2 instance ID format
 - CLI remains a thin wrapper around AWS CLI, SSM, and local OpenSSH tools, not the AWS SDK
+- `npm` installation remains a first-class supported distribution path
+- the optional distributable single-file CLI artifact begins with `#!/usr/bin/env node`
 
 ---
 
@@ -810,6 +870,12 @@ Applies only to AWS-dependent commands:
 
 ## Validation and Verification Plan
 
+All preconditions, postconditions, and invariants must be covered by the tests (at least exercised by unit tests).
+Global invariants must be exercised by property-based tests.
+Every contract must be exercised by the test suite.
+Every state transition must be exercised by the test suite.
+Safety and liveness properties must be exercised by property-based tests.
+
 Property-based testing strategy:
 
 - integrate `fast-check` with `vitest` using the documented `fast-check` Vitest environment setup so property tests run in the standard test suite
@@ -842,6 +908,9 @@ Unit and contract tests:
 18. `cp` rejects non-regular files, oversized files, non-running instances, and missing SSH prerequisites
 19. `cp` `scp`/`ssh` argv construction for SSM proxying, remote temp-file cleanup, and final-path safety guarantees
 20. stdout, stderr, and exit-code contract tests for every command
+21. package metadata and build configuration support standard `npm` installation of the CLI
+22. optional single-file build output is exactly one JavaScript file and begins with the required shebang
+23. the `npm`-installed CLI and built single-file artifact preserve the same documented CLI contracts
 
 Property-based state-machine tests:
 
@@ -891,6 +960,8 @@ Integration-oriented tests with mocked AWS CLI fixtures:
 3. `up` and `down` polling across multiple state observations
 4. `connect` startup success and `lastConnectAt` update
 5. `cp` upload-via-`scp` over SSM and remote finalization flow
+6. smoke test the `npm`-installed CLI for help output and basic local-only command execution
+7. smoke test the bundled `dist/devbox.js` artifact for help output and basic local-only command execution
 
 ---
 
@@ -907,6 +978,9 @@ Integration-oriented tests with mocked AWS CLI fixtures:
 9. implement SSM readiness checks and `connect`
 10. implement `cp` using `scp` and `ssh` over SSM with temp-path finalization
 11. implement `rm --terminate` with documented sequencing
-12. integrate `fast-check` with `vitest` and add property-based state-machine coverage for transitions, invariants, and safety/liveness properties
-13. add contract, subprocess-fixture, and failure-atomicity tests
-14. polish error messages and help text
+12. add packaging for standard `npm` installation of the CLI
+13. add the optional single-file build pipeline and shebang-preserving distribution artifact
+14. verify the `npm`-installed CLI and bundled artifact behave the same as the TypeScript entrypoint
+15. integrate `fast-check` with `vitest` and add property-based state-machine coverage for transitions, invariants, and safety/liveness properties
+16. add contract, subprocess-fixture, and failure-atomicity tests
+17. polish error messages and help text

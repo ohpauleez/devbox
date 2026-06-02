@@ -756,6 +756,94 @@ The initial evidence stack follows the repository lightweight-formal-methods gui
 
 The key verification claim is not full formal proof. It is that the critical state transitions, invariants, and cross-system failure boundaries are explicit, mechanically checked, and kept live in CI.
 
+### Unit and Contract Tests
+
+1. Config schema validation and first-run auto-create behavior
+2. Advisory lock acquisition and concurrent mutation rejection
+3. Temp-file write and atomic replace behavior
+4. Alias validation and uniqueness enforcement
+5. `current` validity rules
+6. Tag merge precedence and forced `Name` override
+7. `ImageId` and `IamInstanceProfile` resolution from template versus config defaults
+8. `init` allowlist and reject list
+9. `NetworkInterfaces` conflict validation
+10. `UserData` pass-through without transformation, including `file:` values
+11. `init` sets `current` on success
+12. `add` sets `current` on success
+13. `rm` local-only behavior
+14. `rm --terminate` sequencing and partial-failure reporting, including `ConsistencyError` after accepted AWS success plus local config write failure
+15. `up` wait-loop success, pending-state wait, and timeout behavior
+16. `down` wait-loop success, stopping-state wait, and timeout behavior
+17. `connect` rejects non-running or non-SSM-ready instances
+18. `connect` stages temporary SSH access using the documented `ssh-over-ssm` flow before session startup
+19. `connect` maps post-startup local config write failure to `ConsistencyError`
+20. `cp` rejects non-regular files, non-running instances, and missing SSH prerequisites
+21. `cp` `scp` and `ssh` argv construction for SSM proxying, temporary SSH key staging, remote temp-file cleanup, and final-path safety guarantees
+22. `cp` maps post-transfer local config write failure to `ConsistencyError`
+23. Stdout, stderr, and exit-code contract tests for every command
+24. Package metadata and build configuration support standard `npm` installation of the CLI
+25. Optional single-file build output is exactly one JavaScript file and begins with the required shebang
+26. The `npm`-installed CLI and built single-file artifact preserve the same documented CLI contracts
+
+### Property-Based State-Machine Tests
+
+1. Config-store state machine: missing config, synthesized first-run config, lock acquisition, successful mutation, rejected concurrent mutation, and crash-safe atomic replace sequences
+2. Alias-tracking state machine: generated `init`, `add`, `switch`, and `rm` command sequences preserve alias uniqueness and `current` validity across all transitions
+3. EC2 lifecycle state machines for `up` and `down`: generated live-state traces exercise all accepted transitions, all rejected transitions, idempotent success cases, timeout paths, and stale-resource failures
+4. SSM readiness state machine for `connect` and `cp`: generated readiness traces verify bounded waiting, success only after readiness, and no premature success
+5. `cp` transfer/finalization state machine: generated transport outcomes verify temp-path upload, atomic finalization, cleanup behavior, temporary key-staging behavior, and no partial final destination writes on failure
+6. Generated mixed command sequences preserve global config invariants and documented command postconditions after every successful step
+
+### Global Invariant and Property Checks
+
+1. `boxes` remains alias-keyed with unique keys
+2. `current` is absent or references an existing alias
+3. Every committed config is schema-valid JSON
+4. No failed local mutation produces partial JSON or partially committed config state
+5. No command mutates aliases other than the targeted alias except where `current` is explicitly documented to change
+6. Destructive AWS effects never occur without an explicit command path that permits them
+7. `rm --terminate` never removes local tracking before AWS termination acceptance or accepted already-absent handling
+8. `connect` and `cp` never update `lastConnectAt` on failed session or transfer startup
+9. `cp` never leaves a partially written file at the final remote destination path
+10. Time-bounded wait loops never report success before the required target state is observed
+11. `init`, `rm --terminate`, `connect`, and `cp` surface `ConsistencyError` when external success is followed by local config write failure
+
+### Safety and Liveness Properties
+
+1. Safety: config writes are atomic, schema-valid, and single-writer
+2. Safety: alias uniqueness and `current` reference integrity are preserved across all reachable local states
+3. Safety: invalid EC2 starting states never trigger start or stop requests
+4. Safety: failed `cp` finalization never overwrites the destination with partial content
+5. Liveness: if generated AWS state traces eventually reach `running`, `up` eventually succeeds within the configured timeout bound
+6. Liveness: if generated AWS state traces eventually reach `stopped`, `down` eventually succeeds within the configured timeout bound
+7. Liveness: if generated SSM traces eventually become ready before timeout, `connect` and `cp` eventually proceed; otherwise they fail with `TimeoutError`
+8. Liveness: if AWS termination is accepted or the instance is already absent, `rm --terminate` eventually removes the local alias unless a local config write failure is injected, in which case it reports divergence explicitly as `ConsistencyError`
+
+### Adapter and Subprocess Tests
+
+1. AWS CLI stdout parsing for success payloads
+2. AWS CLI stderr normalization for common EC2 and SSM failures
+3. SSH and SCP stderr normalization for common auth, host-key, and remote-command failures
+4. `InvalidInstanceID.NotFound` handling for stale resources
+5. Timeout handling when subprocesses hang or return incomplete data
+6. Temporary SSH key staging argv construction and stderr normalization for `aws ssm send-command`
+7. Successful wait for key-staging command completion before SSH or SCP startup
+8. Best-effort cleanup behavior for temporary remote SSH key material
+
+### Integration-Oriented Tests with Mocked AWS CLI Fixtures
+
+1. `init` happy path with config commit
+2. `init` AWS success plus config write failure resulting in `ConsistencyError`
+3. `rm --terminate` accepted by AWS plus config write failure resulting in `ConsistencyError`
+4. `up` and `down` polling across multiple state observations
+5. `connect` startup success and `lastConnectAt` update
+6. `connect` startup success plus config write failure resulting in `ConsistencyError`
+7. `cp` upload-via-`scp` over SSM and remote finalization flow
+8. `cp` remote transfer and finalization success plus config write failure resulting in `ConsistencyError`
+9. `connect` and `cp` perform the documented `ssh-over-ssm` key-staging flow before SSH transport begins
+10. Smoke test the `npm`-installed CLI for help output and basic local-only command execution
+11. Smoke test the bundled `dist/devbox.js` artifact for help output and basic local-only command execution
+
 ## Open Questions
 
 - No blocking product questions remain for the initial change proposal.

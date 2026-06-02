@@ -270,6 +270,157 @@ WHEN `rm <alias>` removes the alias that is also `current`, THE devbox domain SH
 
 **Postcondition:** No automatic reassignment occurs and subsequent current-box commands require explicit `switch`.
 
+### Requirement: Init Template Field Allowlist [BOX-DOMAIN-INIT-ALLOWLIST]
+WHEN `init <alias> <template-file>` processes template JSON, THE devbox domain SHALL accept only the following top-level fields: `BlockDeviceMappings`, `CapacityReservationSpecification`, `CpuOptions`, `CreditSpecification`, `DisableApiStop`, `DisableApiTermination`, `EbsOptimized`, `EnclaveOptions`, `HibernationOptions`, `IamInstanceProfile`, `ImageId`, `InstanceInitiatedShutdownBehavior`, `InstanceMarketOptions`, `InstanceType`, `KernelId`, `KeyName`, `LicenseSpecifications`, `MaintenanceOptions`, `MetadataOptions`, `Monitoring`, `NetworkInterfaces`, `Placement`, `PrivateDnsNameOptions`, `RamDiskId`, `SecurityGroupIds`, `SecurityGroups`, `TagSpecifications`, and `UserData`.
+
+THE devbox domain SHALL reject `InstanceRequirements` and any unknown top-level key with `ValidationError`.
+
+THE devbox domain SHALL always add `MinCount=1` and `MaxCount=1` to the `run-instances` invocation.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Unknown Template Field Rejected [BOX-INIT-UNKNOWN-FIELD]
+IF the template JSON contains a top-level key not in the accepted allowlist, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched and no config is mutated.
+
+#### Scenario: InstanceRequirements Rejected [BOX-INIT-REJECT-IR]
+IF the template JSON contains `InstanceRequirements`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched and no config is mutated.
+
+### Requirement: Init Conditional Conflict Rules [BOX-DOMAIN-INIT-CONFLICTS]
+WHEN `init` processes template JSON that contains `NetworkInterfaces`, THE devbox domain SHALL reject top-level `SecurityGroupIds` and top-level `SecurityGroups` with `ValidationError`, and SHALL require security groups under `NetworkInterfaces[*].Groups`.
+
+WHEN `init` processes template JSON that uses top-level `SecurityGroups` without `NetworkInterfaces`, THE devbox domain SHALL allow the request to proceed and surface any AWS rejection clearly if the account or network context does not support that request shape.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: NetworkInterfaces With Top Level SGs Rejected [BOX-INIT-NI-CONFLICT]
+IF the template contains both `NetworkInterfaces` and top-level `SecurityGroupIds` or `SecurityGroups`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched and no config is mutated.
+
+#### Scenario: SecurityGroups Without NetworkInterfaces Allowed [BOX-INIT-SG-ALLOWED]
+WHEN the template uses top-level `SecurityGroups` without `NetworkInterfaces`, THE devbox domain SHALL pass the request through and relay any AWS rejection clearly.
+
+**Postcondition:** AWS is authoritative for whether the request shape is valid in the active context.
+
+### Requirement: Required Tag Validation Values [BOX-DOMAIN-TAGS-VALUES]
+WHEN `init` validates required tags after merge, THE devbox domain SHALL enforce these value constraints:
+
+- `env`: must be one of `prod`, `preprod`, `staging`, `dev`
+- `service`: must equal `devbox`
+- `version`: must be 7 to 40 characters, with `0000000` allowed as the built-in placeholder default
+- `customer-data`: must be one of `true`, `false`
+- `team`: must be a non-empty short identifier
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Invalid Tag Value Rejected [BOX-TAGS-VALUE-FAIL]
+IF any required tag has an empty or disallowed value after merge, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched with invalid tag values.
+
+### Requirement: Tag Merge Precedence [BOX-DOMAIN-TAGS-MERGE]
+WHEN `init` builds AWS instance tags, THE devbox domain SHALL apply this precedence order:
+
+1. built-in required tag defaults
+2. `config.defaults.tags`
+3. template `TagSpecifications` for `ResourceType=instance`
+4. forced `Name=<alias>` override
+5. required-tag validation
+
+Additional rules:
+- `devbox` always emits exactly one merged `TagSpecification` for `ResourceType=instance`
+- template `TagSpecifications` for non-instance resource types pass through unchanged
+- if the template also contains an `instance` `TagSpecification`, its tags are merged rather than duplicated
+- `Name` from the template is ignored and replaced with the alias
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Template Name Tag Overridden [BOX-TAGS-NAME-OVERRIDE]
+WHEN the template includes a `Name` tag in its instance `TagSpecification`, THE devbox domain SHALL replace it with the alias.
+
+**Postcondition:** The launched instance `Name` tag equals the alias regardless of template content.
+
+#### Scenario: Non Instance TagSpecs Preserved [BOX-TAGS-NONINSTANCE]
+WHEN the template includes `TagSpecifications` for non-instance resource types, THE devbox domain SHALL pass them through unchanged.
+
+**Postcondition:** Volume or other resource-type tags from the template are not lost or merged into the instance tags.
+
+### Requirement: UserData Pass-Through [BOX-DOMAIN-INIT-USERDATA]
+WHEN template JSON contains a `UserData` field, THE devbox domain SHALL pass the value through unchanged to `aws ec2 run-instances` without modifying, interpreting, validating, or base64-encoding it.
+
+Values such as `file:~/some-file.sh` MUST be preserved exactly because AWS CLI handles special prefixes and base64 encoding behavior itself.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: UserData File Prefix Preserved [BOX-INIT-USERDATA-FILE]
+WHEN the template `UserData` value begins with `file:`, THE devbox domain SHALL pass it unchanged to `aws ec2 run-instances`.
+
+**Postcondition:** The AWS CLI receives the exact `UserData` string from the template without transformation.
+
+### Requirement: Config Creation Policy [BOX-DOMAIN-CONFIG-CREATION]
+WHEN a mutating command encounters a missing config file, THE devbox domain SHALL synthesize first-run config containing:
+
+- `boxes = {}`
+- no `current`
+- `defaults.tags` with built-in required tag defaults only
+
+THE devbox domain SHALL NOT invent environment-specific `ImageId` or `IamInstanceProfile` values in synthesized first-run config.
+
+WHEN `init` proceeds after first-run synthesis or config load, THE devbox domain SHALL fail with `ValidationError` if `ImageId` or `IamInstanceProfile` is absent after merging template values over config defaults.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Init Fails Without ImageId After Merge [BOX-CONFIG-MISSING-IMAGEID]
+IF neither the template nor config defaults supply `ImageId`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched with a missing AMI.
+
+#### Scenario: Init Fails Without IamInstanceProfile After Merge [BOX-CONFIG-MISSING-IAM]
+IF neither the template nor config defaults supply `IamInstanceProfile`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
+
+**Postcondition:** No instance is launched without an instance profile.
+
+### Requirement: List Batched Describe Strategy [BOX-DOMAIN-LIST-BATCH]
+WHEN `devbox list` enriches tracked boxes with AWS state, THE devbox domain SHALL collect all tracked instance IDs and issue a single `aws ec2 describe-instances` call for the full set when possible.
+
+If the tracked set exceeds AWS CLI per-call limits, THE devbox domain SHALL split the request into bounded batches.
+
+Instances returned by AWS are enriched with live state and instance type. Tracked instance IDs omitted from an otherwise successful AWS response are shown as `stale`. If a full enrichment batch fails because AWS is unavailable, credentials are missing, or the local `aws` executable is absent, THE devbox CLI SHALL still succeed and show all rows as `unknown`.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Single Batch Enrichment [BOX-LIST-BATCH-SINGLE]
+WHEN all tracked instance IDs fit within a single AWS CLI call, THE devbox domain SHALL issue one `describe-instances` call rather than one call per alias.
+
+**Postcondition:** API call count is minimized to reduce throttling risk.
+
+#### Scenario: AWS Unavailable Degrades Gracefully [BOX-LIST-BATCH-UNAVAIL]
+WHEN the enrichment batch fails because AWS is unreachable or the `aws` executable is absent, THE devbox CLI SHALL still succeed and render all rows with state `unknown`.
+
+**Postcondition:** Local tracking visibility is never lost due to AWS enrichment failure.
+
+### Requirement: Remove Without Terminate Warning [BOX-DOMAIN-RM-WARN]
+WHEN `rm <alias>` is invoked without `--terminate`, THE devbox CLI SHALL print a warning that the AWS resources associated with the removed alias may still exist.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Local Remove Warns About AWS Resources [BOX-RM-WARN-MSG]
+WHEN `rm <alias>` succeeds without `--terminate`, THE devbox CLI SHALL emit a warning to stderr indicating that the tracked instance may still be running in AWS.
+
+**Postcondition:** The user is informed that local removal does not affect AWS resource lifecycle.
+
 ## MODIFIED Requirements
 
 ## REMOVED Requirements

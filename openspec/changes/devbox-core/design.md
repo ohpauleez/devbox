@@ -208,6 +208,9 @@ Protocol rules:
 - No remote transport starts before staging is confirmed.
 - No successful external action is silently reclassified as a local-only failure.
 
+Additional remote-access protocol clarification:
+- The `CleanupKey` state represents best-effort cleanup that runs after successful transport. If cleanup itself fails, the command still proceeds to `CommitLastConnect` because the bounded remote background job provides the safety net. The `CleanupKey → TransportFailure` edge applies only when cleanup failure indicates that staging never actually succeeded (a retroactive staging detection failure).
+
 ### Forward Evolution
 - The config model can later add explicit CLI support for editing per-box SSH-user overrides without changing the precedence model.
 - The domain structure supports future optional strict modes, richer listing formats, or additional remote-access options without rewriting the adapter boundaries.
@@ -516,6 +519,7 @@ flowchart TD
 Contract notes:
 - The SSH user must come from invocation override, per-box override, or `defaults.sshUser`.
 - `lastConnectAt` updates only after successful session startup and successful local commit.
+- The `devbox connect` process either execs into or waits on the SSH child process. The exit code is the exit code of the SSH session, not unconditionally 0.
 
 #### `devbox cp <local> <remote>`
 
@@ -562,6 +566,7 @@ flowchart TD
 Contract notes:
 - The final destination must only be replaced after successful upload to a temp path and successful remote finalization.
 - Failed transfer attempts must not partially rewrite the final destination path.
+- No enforced file size limit is applied. SCP and network bandwidth are the natural transfer constraints.
 
 ### Data Design
 - **Config encoding**: UTF-8 JSON at `~/.config/devbox.json`.
@@ -585,12 +590,58 @@ Contract notes:
   - `lastConnectAt` stored as ISO-8601 UTC strings.
   - wait budgets and poll intervals represented as explicit millisecond constants in code (unsigned integers).
 
+### Config File Permissions and Encoding
+
+- Config files are created with mode `0644`. The config contains no secrets.
+- The advisory lock file is created at `~/.config/devbox.json.lock` with mode `0644`.
+- Lock file content is the PID of the holding process as a decimal ASCII string.
+- All config I/O assumes UTF-8 without BOM. A leading BOM is treated as invalid JSON.
+
+### Error Output Format
+
+Stderr on failure:
+- First line: `[devbox] <Category>: <concise message>`
+- Subsequent lines: raw subprocess stderr indented with 2 spaces, when useful for diagnosis.
+
+Examples:
+```
+[devbox] TimeoutError: instance i-abc123 did not reach running within 300s (last: pending)
+[devbox] ConsistencyError: instance launched (i-abc123) but config write failed
+[devbox] TransportError: SSH key staging failed for user ubuntu on i-abc123
+```
+
+### Exit Code Mapping
+
+| Code | Category |
+|------|----------|
+| 0 | Success |
+| 2 | ValidationError |
+| 3 | ConfigError |
+| 4 | DependencyError |
+| 5 | AwsCliError |
+| 6 | NotFoundError |
+| 7 | InstanceStateError |
+| 8 | TimeoutError |
+| 9 | ConsistencyError |
+| 10 | TransportError |
+
+### Signal Handling
+
+- During EC2/SSM polling (`up`, `down`, `connect`, `cp`): SIGINT/SIGTERM immediately abort the poll loop. No rollback of already-submitted AWS state transitions. Exit code is non-zero.
+- During SSH session (`connect`): The `devbox` process either execs or waits on the SSH child process. Signals propagate via standard Unix process group behavior. The exit code of `devbox connect` is the exit code of the SSH session. Remote temporary key cleanup relies on the bounded background removal job (15-second `sed` on the remote host).
+- During config write: If killed between temp-file write and atomic rename, the temp file is orphaned but committed config remains intact. Next invocation's stale-lock recovery handles cleanup.
+
+### Version Source
+
+The CLI version string is read from `package.json` at build time and embedded as a compile-time constant in the bundle. Both the `npm`-installed CLI and the single-file artifact report the same version. The `defaults.tags.version` tag default (`0000000`) is a separate concern for instance tagging.
+
 ### Interface Contracts
 - **CLI to domain**: Passes parsed, typed command inputs and expects either a success result with output payload or a normalized error result.
 - **Domain to config store**: Reads committed config state and submits a complete next-state object for atomic commit; the domain does not manage partial writes.
 - **Domain to AWS adapter**: Requests concrete AWS operations in terms of explicit argv-compatible parameter objects; adapter returns parsed results or normalized failures.
 - **Domain to SSH adapter**: Requests staging, transport, cleanup, and remote finalization through explicit operation objects that already contain resolved SSH user, instance ID, and validated path data.
 - **Build tooling to runtime entrypoint**: Produces a bundled script that preserves the same top-level help/version behavior, command dispatch, and output behavior.
+- **Stdout for `list`**: A human-readable terminal table with columns: current-box indicator (`*`), alias, instance ID, instance type, and state. Column widths adapt to content. When no boxes are tracked, a single line `No boxes tracked` is printed instead.
 
 ### Code Map
 
@@ -651,7 +702,7 @@ Code/component responsibilities:
 - **`src/domain/wait-policy.ts`**: Poll interval and timeout constants.
 - **`src/domain/output-contracts.ts`**: Normalized success/failure rendering rules.
 - **`src/domain/errors.ts`**: Tagged domain and boundary error categories.
-- **`src/adapters/config-store.ts`**: Locking, temp-file writes, `fsync`, replace, and config I/O.
+- **`src/adapters/config-store.ts`**: Locking, temp-file writes, `fsync`, replace, and config I/O. Lock file is at `~/.config/devbox.json.lock` containing the holder PID. Staleness: PID missing/invalid, PID not running, or lock mtime older than 5 minutes.
 - **`src/adapters/aws-cli.ts`**: AWS subprocess execution and response normalization.
 - **`src/adapters/ssh-cli.ts`**: SSH/SCP command construction, key staging, and cleanup.
 - **`build/esbuild.ts`**: Single-file bundle production.

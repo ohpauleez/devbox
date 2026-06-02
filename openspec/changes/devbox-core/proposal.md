@@ -44,7 +44,7 @@ The product is intentionally narrow. It shells out to `aws ec2`, `aws ssm`, `ssh
 - `devbox connect`: Open an interactive SSH session to the current tracked instance through AWS SSM using temporary staged SSH authorization.
 - `devbox cp <local> <remote>`: Upload one regular local file to the current tracked instance through the same staged SSM-backed SSH access path.
 
-At a product level, the commands fall into three classes:
+At a product level, the commands fall into four classes:
 - top-level informational flags: `-v`, `--version`, `-h`, `--help`
 - local-only commands: `switch`, `rm` without `--terminate`
 - local-first commands with optional AWS enrichment: `list`
@@ -87,6 +87,9 @@ The domain consists of a local registry of named development machines and the AW
 - **Tracked Box**: A local record that binds a box alias to an EC2 instance ID and optional metadata such as the last successful remote-access time and an optional per-box SSH user override.
 - **Current Box**: The single tracked box selected as the default target for commands that operate without an explicit alias parameter.
 - **Defaults**: Shared configuration values used to create or access boxes, including required tag defaults and a default SSH user.
+  - `defaults.tags`: A string-keyed, string-valued object with required keys: `env`, `service`, `version`, `customer-data`, `team`.
+  - `defaults.ImageId`: An optional AMI identifier or SSM parameter resolve expression.
+  - `defaults.IamInstanceProfile`: An optional IAM instance profile object.
 - **Launch Template Input**: A user-provided launch-template-style JSON document used as input to create a new EC2 instance.
 - **AWS Instance**: The live EC2 machine identified by the tracked instance ID and observed through the active AWS account and region.
 - **Remote Access Session**: A bounded interaction that temporarily stages SSH access through AWS SSM for connection setup or file transfer.
@@ -164,6 +167,7 @@ Preconditions:
 Postconditions:
 - The command reports tracked aliases from local config.
 - When AWS enrichment is available, the command may show live instance state and instance type for tracked boxes.
+- Output format is a human-readable terminal table with columns: current-box indicator, alias, instance ID, instance type, and state. State values include `running`, `stopped`, `pending`, `stopping`, `shutting-down`, `terminated`, `stale`, and `unknown`.
 - The command does not mutate config state.
 
 Invariants:
@@ -208,7 +212,7 @@ Preconditions:
 - If `--terminate` is supplied, the active AWS context permits termination of the tracked instance.
 
 Postconditions:
-- Without `--terminate`, the alias is removed locally and `current` is cleared if necessary.
+- Without `--terminate`, the alias is removed locally and `current` is cleared if necessary. When `current` is cleared, it becomes absent (removed from config) rather than reassigned to another box.
 - With `--terminate`, AWS termination is requested first and local tracking is removed only after AWS accepts termination or reports the instance already absent.
 
 Invariants:
@@ -269,6 +273,7 @@ Preconditions:
 
 Postconditions:
 - The command starts an SSM-backed SSH session to the current tracked instance.
+- The SSH session process replaces or is waited on by the `devbox` process; the exit code of `devbox connect` is the exit code of the SSH session.
 - `lastConnectAt` is updated only after session startup succeeds and the subsequent local config write succeeds.
 
 Invariants:
@@ -281,7 +286,7 @@ Invariants:
 Preconditions:
 - `current` is set and resolves to a tracked instance ID.
 - The tracked instance is in EC2 state `running` and becomes SSM-ready within the documented bound.
-- The local source is a readable regular file.
+- The local source is a readable regular file. There is no enforced file size limit — SCP and network bandwidth are the natural constraints.
 - The remote path is non-empty after trimming and contains no ASCII control characters or null bytes.
 - Required local executables and AWS SSM session prerequisites are present.
 - An SSH user can be resolved from invocation override, per-box override, or `defaults.sshUser`.
@@ -387,6 +392,46 @@ Invariants:
   - **Rationale**: Upload correctness depends on both the transport path and the final atomic move into place.
 - **Post-transfer local divergence**: The remote file update succeeds but the `lastConnectAt` update cannot be committed locally.
   - **Rationale**: Users must know the remote destination may already be updated even if the local metadata is stale.
+
+## Error Format and Exit Codes
+
+### Exit Code Table
+
+| Code | Category | Meaning |
+|------|----------|---------|
+| 0 | — | Success |
+| 2 | ValidationError | Invalid input, alias, template, or remote path |
+| 3 | ConfigError | Config malformed, unreadable, or lock conflict |
+| 4 | DependencyError | Missing local executable or dependency |
+| 5 | AwsCliError | AWS CLI reported API failure |
+| 6 | NotFoundError | Instance not describable in active account/region |
+| 7 | InstanceStateError | Instance in invalid state for requested transition |
+| 8 | TimeoutError | Bounded wait exceeded |
+| 9 | ConsistencyError | External success followed by local commit failure |
+| 10 | TransportError | SSH, SCP, or key-staging failure |
+
+### Stderr Format
+
+The first line of stderr on failure follows this format:
+```
+[devbox] <Category>: <concise message>
+```
+
+Subsequent lines may contain indented raw stderr from AWS CLI, SSH, or SCP subprocesses when useful for diagnosis.
+
+### Config File Permissions
+
+Config files are created with mode `0644`. The config contains no secrets — only aliases, instance IDs, timestamps, and tag metadata. The advisory lock file uses the same permissions.
+
+### Signal Handling
+
+- During EC2/SSM polling: SIGINT/SIGTERM immediately abort the poll loop and exit. No rollback of already-submitted AWS state transitions.
+- During SSH session (`connect`): Signals propagate to the child SSH process via standard Unix process group behavior. Remote temporary key cleanup relies on the bounded background removal job on the remote host.
+- During config write: If killed between temp-file write and atomic rename, the temp file is orphaned but committed config remains intact.
+
+### Version Source
+
+The CLI version is read from `package.json` at build time and embedded as a constant. The `--version` flag prints this value. The `defaults.tags.version` field is a separate concern used for instance tagging, not CLI versioning.
 
 ## Quality Attributes
 

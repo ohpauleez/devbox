@@ -136,6 +136,50 @@ IF best-effort cleanup cannot be completed during a local failure path, THEN THE
 
 **Postcondition:** The caller receives explicit transport failure information instead of silent cleanup loss.
 
+### Requirement: Temporary Key Storage [REMOTE-ADAPTER-KEYSTORE]
+WHEN `connect` or `cp` requires a temporary SSH keypair, THE devbox adapter SHALL store the private key at `~/.ssh/ssm-ssh-tmp` and the public key at `~/.ssh/ssm-ssh-tmp.pub`, generated with `ssh-keygen -t rsa -N '' -f ~/.ssh/ssm-ssh-tmp -C ssh-over-ssm`.
+
+**References:**
+- `proposal.md#Quality Attributes`
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Agent Key Available [REMOTE-KEY-AGENT]
+WHEN `ssh-add -l` reports available keys, THE devbox adapter SHALL use the first key from the local SSH agent instead of generating a temporary keypair.
+
+**Postcondition:** No temporary key files are created on disk.
+
+#### Scenario: Temporary Key Generated And Cleaned [REMOTE-KEY-TEMP]
+WHEN no agent key is available, THE devbox adapter SHALL generate a temporary keypair at `~/.ssh/ssm-ssh-tmp` and remove both files on process exit.
+
+**Postcondition:** Temporary key files are removed when the process exits normally or via trapped signals.
+
+#### Scenario: Remote Key Removal Bounded [REMOTE-KEY-REMOTE-CLEANUP]
+WHEN a temporary SSH public key is staged on the remote instance, THE devbox adapter SHALL schedule a background removal job on the remote host that removes the key from `authorized_keys` after 15 seconds.
+
+**Postcondition:** The remote authorized-key entry is removed within 15 seconds regardless of local process behavior.
+
+### Requirement: Connect Session Lifecycle [REMOTE-DOMAIN-SESSION]
+WHEN `connect` hands off the SSH session, THE devbox process SHALL either exec into or wait on the SSH child process and SHALL exit with the SSH process exit code.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Connect Propagates SSH Exit Code [REMOTE-SESSION-EXIT]
+WHEN the SSH session terminates, THE devbox connect process SHALL exit with the same exit code as the SSH child process.
+
+**Postcondition:** The caller observes the SSH session's actual exit status.
+
+### Requirement: Copy File Size [REMOTE-DOMAIN-FILESIZE]
+WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce an artificial file size limit.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Large File Accepted [REMOTE-CP-LARGESIZE]
+WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
+
+**Postcondition:** SCP and network bandwidth are the natural transfer constraints.
+
 ## MODIFIED Requirements
 
 ## REMOVED Requirements

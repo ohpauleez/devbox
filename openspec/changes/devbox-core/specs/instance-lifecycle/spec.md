@@ -102,6 +102,31 @@ IF the target state is not observed within 5 minutes, THEN THE devbox adapter SH
 
 **Postcondition:** The timeout is visible to the caller and no false success is reported.
 
+#### Scenario: Pending Instance Waits Without Resubmit [LIFE-UP-PENDING]
+WHEN the current instance state is `pending`, THE devbox domain SHALL wait for `running` without sending another start request.
+
+**Postcondition:** No redundant start request is submitted and the command succeeds only after observing `running` within the timeout bound.
+
+#### Scenario: Running Instance Succeeds Immediately [LIFE-UP-IDEMPOTENT]
+WHEN the current instance state is already `running`, THE devbox domain SHALL succeed immediately without sending a start request or waiting.
+
+**Postcondition:** The command prints the instance ID and exits with code 0.
+
+#### Scenario: Stopping Instance Waits Without Resubmit [LIFE-DOWN-STOPPING]
+WHEN the current instance state is `stopping`, THE devbox domain SHALL wait for `stopped` without sending another stop request.
+
+**Postcondition:** No redundant stop request is submitted and the command succeeds only after observing `stopped` within the timeout bound.
+
+#### Scenario: Stopped Instance Succeeds Immediately [LIFE-DOWN-IDEMPOTENT]
+WHEN the current instance state is already `stopped`, THE devbox domain SHALL succeed immediately without sending a stop request or waiting.
+
+**Postcondition:** The command prints the instance ID and exits with code 0.
+
+#### Scenario: Signal During Polling Aborts [LIFE-POLL-SIGNAL]
+IF SIGINT or SIGTERM is received during EC2 state polling, THEN THE devbox adapter SHALL abort the poll loop immediately without rolling back the already-submitted AWS state transition.
+
+**Postcondition:** The process exits with a non-zero code and does not report false success.
+
 ## MODIFIED Requirements
 
 ## REMOVED Requirements

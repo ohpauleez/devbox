@@ -209,6 +209,67 @@ IF the advisory lock is held by a live, recent process and is not stale, THEN TH
 
 **Postcondition:** The previously committed config remains unchanged.
 
+### Requirement: List Output Format [BOX-CLI-LIST-FORMAT]
+WHEN `devbox list` prints tracked boxes, THE devbox CLI SHALL render a human-readable terminal table with columns: current-box indicator, alias, instance ID, instance type, and state.
+
+**References:**
+- `proposal.md#Scope`
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Table With Current Indicator [BOX-LIST-TABLE]
+WHEN tracked boxes exist and AWS enrichment succeeds, THE devbox CLI SHALL print a table where the current box row is marked with `*` in the first column and other rows show a space.
+
+**Postcondition:** The table includes alias, instance ID, instance type, and one of the state values: `running`, `stopped`, `pending`, `stopping`, `shutting-down`, `terminated`, `stale`, or `unknown`.
+
+#### Scenario: Empty Registry Prints Message [BOX-LIST-EMPTY]
+WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes tracked`.
+
+**Postcondition:** No table header or empty table is rendered.
+
+### Requirement: Config Permissions [BOX-ADAPTER-PERMS]
+WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0644`.
+
+**References:**
+- `proposal.md#Quality Attributes`
+
+#### Scenario: Config Created With Standard Permissions [BOX-PERMS-CONFIG]
+WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0644`.
+
+**Postcondition:** The config file is readable by the owner and group/others.
+
+### Requirement: Stale Lock Specification [BOX-ADAPTER-STALELOCK]
+WHEN the advisory lock file exists and the current process needs to acquire it, THE devbox adapter SHALL detect staleness using PID validity, PID liveness, and a 5-minute mtime threshold.
+
+**References:**
+- `proposal.md#Quality Attributes`
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Stale Lock By Dead PID [BOX-STALELOCK-PID]
+WHEN the lock file contains a PID that does not correspond to a running process, THE devbox adapter SHALL treat the lock as stale, remove it, and retry acquisition once.
+
+**Postcondition:** The stale lock does not permanently block the mutation.
+
+#### Scenario: Stale Lock By Age [BOX-STALELOCK-AGE]
+WHEN the lock file mtime is older than 5 minutes, THE devbox adapter SHALL treat the lock as stale regardless of PID liveness.
+
+**Postcondition:** Long-orphaned locks are recovered automatically.
+
+#### Scenario: Live Lock Not Stolen [BOX-STALELOCK-LIVE]
+WHEN the lock file contains a valid PID of a running process and the mtime is within 5 minutes, THE devbox adapter SHALL reject the mutation with `ConfigError`.
+
+**Postcondition:** A live, recent lock holder is never preempted.
+
+### Requirement: Remove Clears Current [BOX-DOMAIN-RM-CURRENT]
+WHEN `rm` removes an alias that is the current box, THE devbox domain SHALL clear `current` by removing it from config entirely rather than reassigning it to another box.
+
+**References:**
+- `proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Current Becomes Absent After Remove [BOX-RM-CURRENT-CLEAR]
+WHEN `rm <alias>` removes the alias that is also `current`, THE devbox domain SHALL set `current` to absent in the committed config.
+
+**Postcondition:** No automatic reassignment occurs and subsequent current-box commands require explicit `switch`.
+
 ## MODIFIED Requirements
 
 ## REMOVED Requirements

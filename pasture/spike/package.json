@@ -1,0 +1,28 @@
+{
+  "name": "devbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "devbox": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "fast-check": "^3.23.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

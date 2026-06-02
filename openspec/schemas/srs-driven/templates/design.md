@@ -64,7 +64,7 @@
 ## Component Design
 
 ### Key Components
-<!-- Detailed design of significant components -->
+<!-- Detailed design of significant logical components -->
 
 ### Data Design
 <!-- Data models, storage, schemas, encoding formats, data validation rules, migrations -->
@@ -73,7 +73,7 @@
 <!-- API contracts, message formats, protocol details -->
 
 ### Code Map
-<!-- Where key logic lives in the codebase: file paths, modules, layers -->
+<!-- Provide an overview where key logic lives or will live in the codebase: file paths, modules, layers -->
 
 ## Failure and Reliability
 

@@ -1,0 +1,28 @@
+{
+  "name": "devbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI for managing AWS EC2 development boxes",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "devbox": "dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bundle": "node ./build/esbuild.ts",
+    "smoke:parity": "npm run build && npm run bundle && node ./scripts/smoke-parity.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.25.5",
+    "fast-check": "^3.23.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

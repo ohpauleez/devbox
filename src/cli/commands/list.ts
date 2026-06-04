@@ -9,9 +9,15 @@ import { err, ok } from "../../domain/result.js";
 import type { CommandResult } from "../context.js";
 
 /**
- * Execute local registry listing.
+ * Execute local registry listing with live AWS state enrichment.
  *
- * @returns list command output or ConfigError
+ * @returns formatted table output, empty-state message, or normalized failure
+ *
+ * @remarks
+ * Precondition: config must be loadable (file present or first-run synthesis).
+ * Postcondition: on success, output contains a table row per tracked box sorted alphabetically.
+ * Failures: `ConfigError` when config cannot be loaded; `NotFoundError` for critical AWS errors
+ * (non-critical AWS errors are gracefully degraded to "unknown" state values).
  */
 export async function runListCommand(): Promise<CommandResult> {
   const configResult = await loadConfig();

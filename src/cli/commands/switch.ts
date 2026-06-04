@@ -5,10 +5,15 @@ import { ok, err } from "../../domain/result.js";
 import type { CommandResult } from "../context.js";
 
 /**
- * Execute local current-alias switch.
+ * Execute local current-alias switch to a different tracked box.
  *
- * @param aliasRaw target alias input
- * @returns success message or normalized failure
+ * @param aliasRaw - target alias to set as current
+ * @returns alias in stdout on success
+ *
+ * @remarks
+ * Precondition: `aliasRaw` must be a valid, currently-tracked alias.
+ * Postcondition: on success, `config.current` is updated to the target alias.
+ * Failures: `ValidationError` for invalid or untracked alias; `ConfigError` for persistence failures.
  */
 export async function runSwitchCommand(aliasRaw: string): Promise<CommandResult> {
   const parsedAlias = parseAlias(aliasRaw);

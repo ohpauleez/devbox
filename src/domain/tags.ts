@@ -7,6 +7,10 @@ const VALID_CUSTOMER_DATA_VALUES = new Set(["true", "false"]);
 
 /**
  * Built-in required tag defaults for first-run config synthesis.
+ *
+ * @remarks
+ * Invariant: satisfies all `RequiredTags` validation constraints.
+ * Used as the base layer in `mergeRequiredTags` and `synthesizeFirstRunConfig`.
  */
 export const BUILTIN_REQUIRED_TAG_DEFAULTS: RequiredTags = {
   env: "dev",
@@ -17,10 +21,34 @@ export const BUILTIN_REQUIRED_TAG_DEFAULTS: RequiredTags = {
 };
 
 /**
- * Validate required tag values.
+ * Validate required tag values against organizational constraints.
  *
- * @param tags required tag set
- * @returns success when all required value constraints hold
+ * @param tags - required tag set to validate
+ * @returns `ok(undefined)` when all constraints hold; `ConfigError` on violation
+ *
+ * @remarks
+ * Precondition: `tags` has all five required keys (env, service, version, customer-data, team).
+ * Postcondition: on success, all tag values satisfy their domain constraints.
+ * Invariant: validation is stateless and deterministic.
+ * Failures: `ConfigError` when env is not in allowed set, service is not "devbox",
+ * version length is outside 7-40, customer-data is not "true"/"false", or team is empty.
+ *
+ * @example
+ * ```ts
+ * import { validateRequiredTags } from "./tags.js";
+ *
+ * const result = validateRequiredTags({
+ *   env: "dev", service: "devbox", version: "0000000",
+ *   "customer-data": "false", team: "platform",
+ * });
+ * // result.ok === true
+ *
+ * const bad = validateRequiredTags({
+ *   env: "invalid", service: "devbox", version: "0000000",
+ *   "customer-data": "false", team: "platform",
+ * });
+ * // bad.ok === false, bad.error.category === "ConfigError"
+ * ```
  */
 export function validateRequiredTags(tags: RequiredTags): Result<void, DevboxError> {
   if (!VALID_ENV_VALUES.has(tags.env)) {
@@ -42,10 +70,27 @@ export function validateRequiredTags(tags: RequiredTags): Result<void, DevboxErr
 }
 
 /**
- * Merge built-in defaults with user defaults.
+ * Merge built-in defaults with user-configured required tags.
  *
- * @param configured configured required tags from config
- * @returns merged tags before validation
+ * @param configured - user-configured required tags from config file
+ * @returns merged tag set with user values taking precedence over built-in defaults
+ *
+ * @remarks
+ * Precondition: `configured` has the `RequiredTags` shape (all keys present).
+ * Postcondition: returned object has all required tag keys; user values override built-in defaults.
+ * Invariant: built-in defaults are never mutated. Spread order guarantees user precedence.
+ *
+ * @example
+ * ```ts
+ * import { mergeRequiredTags } from "./tags.js";
+ *
+ * const merged = mergeRequiredTags({
+ *   env: "staging", service: "devbox", version: "abc1234",
+ *   "customer-data": "false", team: "infra",
+ * });
+ * // merged.env === "staging" (user override)
+ * // merged.team === "infra" (user override)
+ * ```
  */
 export function mergeRequiredTags(configured: RequiredTags): RequiredTags {
   return {

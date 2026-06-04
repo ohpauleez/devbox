@@ -1,3 +1,17 @@
+/**
+ * @module init-mapper
+ *
+ * Maps a user-provided launch template (JSON) plus config defaults into a
+ * validated `run-instances` API payload for the `init` command.
+ *
+ * @remarks
+ * The merge algorithm applies a layered precedence model:
+ * 1. Template values override config defaults for `ImageId` and `IamInstanceProfile`.
+ * 2. Required tags are merged: built-in defaults < config defaults < template tags.
+ * 3. The `Name` tag is always set to the alias, overriding any template value.
+ * 4. Non-instance TagSpecifications (e.g., volume tags) are preserved verbatim.
+ */
+
 import { makeError, type DevboxError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import { mergeRequiredTags, validateRequiredTags } from "./tags.js";
@@ -34,6 +48,13 @@ const ALLOWED_TEMPLATE_KEYS = new Set([
   "UserData",
 ]);
 
+/**
+ * Output of the init template mapping: a validated run-instances payload.
+ *
+ * @remarks
+ * `payload` contains all keys required by the EC2 RunInstances API,
+ * including merged tags, image ID, IAM profile, and MinCount/MaxCount = 1.
+ */
 export interface InitRunInstancesRequest {
   readonly payload: Record<string, unknown>;
 }
@@ -150,6 +171,39 @@ function parseMergedRequiredTags(mergedMap: Record<string, string>): Result<Requ
 
 /**
  * Build `run-instances` payload from template + defaults + alias.
+ *
+ * @param alias - box alias used as the instance `Name` tag
+ * @param template - unknown JSON template value (typically from a `.json` file)
+ * @param defaults - config defaults providing fallback `ImageId`, `IamInstanceProfile`, and tags
+ * @returns validated `InitRunInstancesRequest` on success; `ValidationError` on constraint violation
+ *
+ * @remarks
+ * Precondition: `alias` is a non-empty string. `defaults` is a schema-valid `DefaultsConfig`.
+ * Postcondition on success: payload contains `ImageId`, `IamInstanceProfile`, merged
+ * `TagSpecifications` (with `Name` = alias), and `MinCount`/`MaxCount` = 1.
+ *
+ * Merge algorithm (literate):
+ * 1. Validate template shape — reject unknown keys and unsupported combinations.
+ * 2. Resolve `ImageId`: template value wins, else fall back to defaults.
+ * 3. Resolve `IamInstanceProfile`: template value wins, else fall back to defaults.
+ * 4. Merge tags: start with built-in defaults, overlay config defaults, overlay template
+ *    instance tags, then force `Name` = alias. This ensures required tags are always present.
+ * 5. Validate merged required tags against organizational constraints.
+ * 6. Reassemble TagSpecifications preserving non-instance specs from the template.
+ * 7. Construct final payload with all resolved values.
+ *
+ * Failures: `ValidationError` for invalid template structure, missing required fields after
+ * merge, conflicting NetworkInterfaces + SecurityGroups, or tag constraint violations.
+ *
+ * @example
+ * ```ts
+ * import { mapInitTemplateToRunInstances } from "./init-mapper.js";
+ *
+ * const result = mapInitTemplateToRunInstances("dev1", templateJson, config.defaults);
+ * if (result.ok) {
+ *   // result.value.payload is ready for the RunInstances API
+ * }
+ * ```
  */
 export function mapInitTemplateToRunInstances(
   alias: string,
@@ -160,12 +214,15 @@ export function mapInitTemplateToRunInstances(
     return err(makeError("ValidationError", "template must be a JSON object"));
   }
 
+  // Step 1: Validate template shape — reject unknown or conflicting keys early.
   const shapeValidation = validateTemplateShape(template);
   if (!shapeValidation.ok) {
     return shapeValidation;
   }
 
+  // Step 2: Resolve ImageId — template takes precedence over defaults.
   const imageId = typeof template.ImageId === "string" ? template.ImageId : defaults.ImageId;
+  // Step 3: Resolve IamInstanceProfile — template takes precedence over defaults.
   const iamProfile = isRecord(template.IamInstanceProfile)
     ? template.IamInstanceProfile
     : defaults.IamInstanceProfile;
@@ -177,19 +234,25 @@ export function mapInitTemplateToRunInstances(
     return err(makeError("ValidationError", "IamInstanceProfile is required after merge"));
   }
 
+  // Step 4: Merge tags with layered precedence.
+  // Start with built-in defaults overlaid by config defaults.
   const mergedDefaultsTags = mergeRequiredTags(defaults.tags);
+  // Extract any existing instance tags from the template.
   const templateInstanceTagMap = toTagMap(extractInstanceTags(template.TagSpecifications));
+  // Merge all layers; Name is always forced to the alias.
   const mergedTagMap: Record<string, string> = {
     ...mergedDefaultsTags,
     ...templateInstanceTagMap,
     Name: alias,
   };
 
+  // Step 5: Validate that merged required tags satisfy organizational constraints.
   const requiredValidation = parseMergedRequiredTags(mergedTagMap);
   if (!requiredValidation.ok) {
     return requiredValidation;
   }
 
+  // Step 6: Reassemble TagSpecifications preserving non-instance specs.
   const nonInstanceTagSpecs = preserveNonInstanceTagSpecs(template.TagSpecifications);
   const mergedTagSpecifications = [
     ...nonInstanceTagSpecs,
@@ -199,6 +262,7 @@ export function mapInitTemplateToRunInstances(
     },
   ];
 
+  // Step 7: Construct final payload with all resolved values.
   const payload: Record<string, unknown> = {
     ...template,
     ImageId: imageId,

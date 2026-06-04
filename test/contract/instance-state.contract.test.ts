@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+import {
+  decideUpAction,
+  decideDownAction,
+  type Ec2InstanceState,
+} from "../../src/domain/instance-state.js";
+
+describe("decideUpAction", () => {
+  it("running -> no submit, no wait", () => {
+    const result = decideUpAction("running");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStart).toBe(false);
+      expect(result.value.wait).toBe(false);
+    }
+  });
+
+  it("pending -> no submit, wait", () => {
+    const result = decideUpAction("pending");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStart).toBe(false);
+      expect(result.value.wait).toBe(true);
+    }
+  });
+
+  it("stopped -> submit, wait", () => {
+    const result = decideUpAction("stopped");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStart).toBe(true);
+      expect(result.value.wait).toBe(true);
+    }
+  });
+
+  it.each(["shutting-down", "terminated", "stopping", "unknown"] as Ec2InstanceState[])(
+    "%s -> error",
+    (state) => {
+      const result = decideUpAction(state);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.category).toBe("InstanceStateError");
+    },
+  );
+});
+
+describe("decideDownAction", () => {
+  it("stopped -> no submit, no wait", () => {
+    const result = decideDownAction("stopped");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStop).toBe(false);
+      expect(result.value.wait).toBe(false);
+    }
+  });
+
+  it("stopping -> no submit, wait", () => {
+    const result = decideDownAction("stopping");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStop).toBe(false);
+      expect(result.value.wait).toBe(true);
+    }
+  });
+
+  it("running -> submit, wait", () => {
+    const result = decideDownAction("running");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStop).toBe(true);
+      expect(result.value.wait).toBe(true);
+    }
+  });
+
+  it.each(["shutting-down", "terminated", "pending", "unknown"] as Ec2InstanceState[])(
+    "%s -> error",
+    (state) => {
+      const result = decideDownAction(state);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.category).toBe("InstanceStateError");
+    },
+  );
+});

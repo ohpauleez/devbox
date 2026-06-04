@@ -27,7 +27,7 @@ Style is not decoration. Style is design pressure applied early enough to preven
 | Verification | Design for simulation, differential testing, property testing, and fault injection |
 | Async | Prefer deterministic async flows, partitioned ownership, message passing, and explicit cancellation |
 | Performance | Target stable object shapes and low allocation in hot paths; avoid unnecessary copies |
-| Documentation | All exported APIs need TSDoc with preconditions, postconditions, invariants, failures, and safety requirements |
+| Documentation | All functions and methods need TSDoc with preconditions, postconditions, invariants, failures, and safety requirements |
 | Tooling | `tsc --strict` clean; zero normalized linter debt; no ignored type errors |
 
 ## The Rules
@@ -379,7 +379,7 @@ Documentation is part of the safety case. It must make the intended semantics, c
 
 #### TSDoc requirements
 
-All exported functions, classes, interfaces, types, and non-trivial methods on exported classes must have TSDoc.
+All functions, methods, classes, interfaces, types, and non-trivial methods on exported classes must have TSDoc.
 
 For functions and methods, TSDoc must document:
 
@@ -407,7 +407,7 @@ If a function returns `Result<T, E>`, document the meaning of both success and e
 Include examples in:
 
 - all module-level docs for non-trivial modules;
-- all exported APIs that are non-trivial;
+- all exported APIs;
 - any function whose behavior is subtle, stateful, capability-gated, performance-sensitive, or easy to misuse.
 
 Examples should demonstrate correct usage, not merely compile.

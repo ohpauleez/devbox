@@ -1,6 +1,6 @@
 # Lightweight Formal Methods in Practice
 
-This guide explains how lightweight formal methods fit into a spec-driven workflow. It complements [`docs/java_style.md`](java_style.md) and [`docs/state_machines.md`](state_machines.md) by focusing on workflow, artifacts, and evidence rather than code-level rules.
+This guide explains how lightweight formal methods fit into a spec-driven workflow. It complements [`docs/typescript_style.md`](typescript_style.md) and [`docs/state_machines.md`](state_machines.md) by focusing on workflow, artifacts, and evidence rather than code-level rules.
 
 Lightweight formal methods are not about proving an entire system correct. They are about making the critical parts of a system explicit enough that they can be checked mechanically and evolved safely. Many costly failures begin in requirements, assumptions, and design, well before code is produced. So the goal is not universal proof -- The goal is to identify the critical properties, produce direct evidence that they hold, and keep that evidence alive as the system changes.
 

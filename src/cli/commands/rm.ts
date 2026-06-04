@@ -19,10 +19,15 @@ function removeAlias(
 }
 
 /**
- * Execute local-only alias removal.
+ * Execute local-only alias removal without AWS termination.
  *
- * @param aliasRaw alias to remove
- * @returns success output with warning or normalized failure
+ * @param aliasRaw - alias to remove from local tracking
+ * @returns alias in stdout with a warning about orphaned AWS resources
+ *
+ * @remarks
+ * Precondition: `aliasRaw` must be a valid, currently-tracked alias.
+ * Postcondition: on success, the alias is removed from config; if it was current, current is cleared.
+ * Failures: `ValidationError` for invalid or untracked alias; `ConfigError` for persistence failures.
  */
 export async function runLocalRemoveCommand(aliasRaw: string): Promise<CommandResult> {
   const parsedAlias = parseAlias(aliasRaw);
@@ -63,10 +68,16 @@ export async function runLocalRemoveCommand(aliasRaw: string): Promise<CommandRe
 }
 
 /**
- * Execute alias removal with explicit AWS termination.
+ * Execute alias removal with explicit AWS instance termination.
  *
- * @param aliasRaw alias to remove and terminate
- * @returns success output or normalized AWS/config/consistency failure
+ * @param aliasRaw - alias to remove and whose instance to terminate
+ * @returns alias in stdout on success
+ *
+ * @remarks
+ * Precondition: `aliasRaw` must be a valid, currently-tracked alias.
+ * Postcondition: on success, the AWS instance is terminated and the alias is removed from config.
+ * Failures: `ValidationError` for invalid/untracked alias; `AwsCliError`/`DependencyError` for termination failures;
+ * `ConsistencyError` when termination succeeds but config persistence fails.
  */
 export async function runTerminateRemoveCommand(aliasRaw: string): Promise<CommandResult> {
   const parsedAlias = parseAlias(aliasRaw);

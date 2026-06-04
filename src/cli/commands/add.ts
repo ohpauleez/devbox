@@ -7,11 +7,17 @@ import type { DevboxConfig, InstanceId } from "../../domain/types.js";
 import type { CommandResult } from "../context.js";
 
 /**
- * Track an existing EC2 instance and set current alias.
+ * Track an existing EC2 instance under a local alias and set it as current.
  *
- * @param instanceIdRaw EC2 instance id provided by user
- * @param aliasRaw local alias to track
- * @returns success output or normalized failure
+ * @param instanceIdRaw - EC2 instance id provided by user (verified against AWS)
+ * @param aliasRaw - local alias to assign (must be unique and pattern-valid)
+ * @returns instance id in stdout on success (with advisory warning if id format is unusual)
+ *
+ * @remarks
+ * Precondition: `aliasRaw` must be valid and unused; `instanceIdRaw` must reference an existing instance.
+ * Postcondition: on success, the instance is tracked under the alias and set as current.
+ * Failures: `ValidationError` for invalid/duplicate alias; `NotFoundError`/`AwsCliError`/`DependencyError`
+ * for AWS verification failures; `ConfigError` for persistence failures.
  */
 export async function runAddCommand(instanceIdRaw: string, aliasRaw: string): Promise<CommandResult> {
   const parsedAlias = parseAlias(aliasRaw);

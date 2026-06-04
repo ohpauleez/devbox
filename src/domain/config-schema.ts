@@ -1,6 +1,19 @@
+/**
+ * @module config-schema
+ *
+ * Parses, validates, serializes, and synthesizes the devbox JSON configuration.
+ *
+ * @remarks
+ * This module owns the schema contract between the on-disk JSON representation
+ * and the in-memory `DevboxConfig` model. All config I/O flows through
+ * `parseConfig` (read path) and `serializeConfig` (write path).
+ *
+ * Invariant: `parseConfig(JSON.parse(serializeConfig(c)))` round-trips for any
+ * valid `DevboxConfig` value `c`.
+ */
+
 import { parseAlias } from "./alias.js";
 import { makeError, type DevboxError } from "./errors.js";
-import { assertNever } from "./assert.js";
 import { err, ok, type Result } from "./result.js";
 import {
   BUILTIN_REQUIRED_TAG_DEFAULTS,
@@ -194,8 +207,29 @@ function parseBoxConfig(raw: unknown): Result<BoxConfig, DevboxError> {
 /**
  * Parse unknown config input into a validated config model.
  *
- * @param raw unknown decoded JSON value
- * @returns schema-valid config or ConfigError
+ * @param raw - unknown decoded JSON value (typically from `JSON.parse`)
+ * @returns schema-valid `DevboxConfig` on success; `ConfigError` on any violation
+ *
+ * @remarks
+ * Precondition: `raw` should be the result of parsing a JSON string; any value is accepted for validation.
+ * Postcondition: on success, all aliases, box configs, defaults, and tags satisfy domain invariants.
+ * Failures: `ConfigError` when any structural or value constraint is violated (e.g., missing fields,
+ * invalid alias keys, invalid SSH user, unrecognized tag values, or current referencing unknown alias).
+ * Invariant: does not mutate `raw`.
+ *
+ * @example
+ * ```ts
+ * import { parseConfig } from "./config-schema.js";
+ *
+ * const raw = JSON.parse(fs.readFileSync("devbox.json", "utf8"));
+ * const result = parseConfig(raw);
+ * if (result.ok) {
+ *   // result.value is a validated DevboxConfig
+ *   console.log(result.value.defaults.tags.env);
+ * } else {
+ *   // result.error.category === "ConfigError"
+ * }
+ * ```
  */
 export function parseConfig(raw: unknown): Result<DevboxConfig, DevboxError> {
   if (!isRecord(raw)) {
@@ -251,7 +285,22 @@ export function parseConfig(raw: unknown): Result<DevboxConfig, DevboxError> {
 /**
  * Build first-run config state for missing config files.
  *
- * @returns schema-valid synthesized config with empty tracking
+ * @returns schema-valid synthesized config with empty box tracking and built-in tag defaults
+ *
+ * @remarks
+ * Precondition: none.
+ * Postcondition: returned config has `boxes = {}`, no `current`, and `defaults.tags` set to `BUILTIN_REQUIRED_TAG_DEFAULTS`.
+ * Invariant: always produces a valid `DevboxConfig` without I/O.
+ *
+ * @example
+ * ```ts
+ * import { synthesizeFirstRunConfig } from "./config-schema.js";
+ *
+ * const config = synthesizeFirstRunConfig();
+ * // Object.keys(config.boxes).length === 0
+ * // config.current === undefined
+ * // config.defaults.tags.env === "dev"
+ * ```
  */
 export function synthesizeFirstRunConfig(): DevboxConfig {
   return {
@@ -265,22 +314,30 @@ export function synthesizeFirstRunConfig(): DevboxConfig {
 /**
  * Serialize config state using stable pretty formatting.
  *
- * @param config validated config
- * @returns newline-terminated JSON string
+ * @param config - validated `DevboxConfig` (must satisfy `parseConfig` invariants)
+ * @returns newline-terminated JSON string with 2-space indentation
+ *
+ * @remarks
+ * Precondition: `config` is a schema-valid `DevboxConfig`.
+ * Postcondition: output is deterministic for the same input and ends with `\n`.
+ * Invariant: `current` key is omitted from output when undefined.
+ *
+ * @example
+ * ```ts
+ * import { serializeConfig, synthesizeFirstRunConfig } from "./config-schema.js";
+ *
+ * const json = serializeConfig(synthesizeFirstRunConfig());
+ * // json ends with "\n"
+ * // JSON.parse(json) round-trips through parseConfig
+ * ```
  */
 export function serializeConfig(config: DevboxConfig): string {
   const doc: Record<string, unknown> = {
     boxes: config.boxes,
     defaults: config.defaults,
   };
-  switch (config.current === undefined) {
-    case true:
-      break;
-    case false:
-      doc.current = config.current;
-      break;
-    default:
-      assertNever(config.current as never);
+  if (config.current !== undefined) {
+    doc.current = config.current;
   }
   return `${JSON.stringify(doc, null, 2)}\n`;
 }

@@ -12,6 +12,8 @@ The core challenge is not raw feature breadth. It is preserving trust across loc
 - Remote access must stage short-lived SSH authorization through AWS SSM and bound the lifetime of temporary authorization material.
 - The implementation must match the repository TypeScript style guide: deterministic core logic, explicit state machines, bounded work, explicit error categories, strict runtime validation at boundaries, and a structure that supports property-based testing.
 - Packaging is part of the product contract. The `npm`-installed CLI and bundled `dist/devbox.js` artifact must preserve the same behavior.
+- This project uses the lightweight formal methods principles described in `docs/lfm.md`.
+- The code must adhere to the principles described in `docs/typescript_style.md`.
 
 ## Goals
 

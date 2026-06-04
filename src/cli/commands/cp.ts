@@ -1,108 +1,138 @@
-import { commitConfig, loadConfig } from "../../adapters/config-store.js";
-import { describeInstance, describeSsmPingStatus } from "../../adapters/aws-cli.js";
+/**
+ * @module cp
+ *
+ * Implements the `cp` command: copy a local file to a remote path on the current
+ * devbox instance. The flow is:
+ *
+ * 1. Validate local file exists and is a regular file (no directories, no symlink tricks).
+ * 2. Validate the remote destination path is safe (no traversal, no dangerous targets).
+ * 3. Resolve all remote-access preconditions (config, running state, SSM, key staging).
+ * 4. Upload the file via SCP to a temporary remote location.
+ * 5. Finalize: atomically move the temp file to the target destination.
+ * 6. Update `lastConnectAt` in config.
+ * 7. Clean up temporary SSH keys (unconditionally in `finally`).
+ *
+ * The two-phase upload (temp → finalize) ensures that a failed transfer never
+ * leaves partial content at the final destination path.
+ *
+ * @example
+ * ```ts
+ * const result = await runCpCommand("./local.txt", "/home/ubuntu/remote.txt");
+ * if (result.ok) {
+ *   console.log(`Copied to: ${result.value.stdoutLines[0]}`);
+ * }
+ * ```
+ */
+
+import { commitConfig } from "../../adapters/config-store.js";
 import {
   cleanupLocalTempKeys,
-  ensureSshKeyMaterial,
   finalizeRemoteFile,
-  stageTemporarySshKey,
   uploadFileOverScp,
   validateLocalRegularFile,
-  type SshContext,
 } from "../../adapters/ssh-cli.js";
-import { resolveCurrentBox } from "../../domain/context.js";
-import { waitForSsmOnline } from "../../domain/ec2-wait.js";
 import { makeError } from "../../domain/errors.js";
 import { parseRemotePath } from "../../domain/remote-path.js";
-import { resolveSshUser } from "../../domain/ssh-user.js";
 import { err, ok } from "../../domain/result.js";
+import { REAL_CLOCK, type Clock } from "../../domain/wait-policy.js";
 import type { DevboxConfig } from "../../domain/types.js";
 import type { CommandResult } from "../context.js";
+import { resolveRemoteAccessPreconditions } from "../remote-access.js";
 
 /**
- * Copy local file to remote path on current box.
+ * Copy a local file to a remote path on the current devbox instance.
  *
- * @param localPath local file path
- * @param remotePathRaw remote destination path
- * @param invocationSshUser optional invocation-level SSH user override
- * @returns command output or normalized failure
+ * @param localPath - Path to the local file to upload. Must exist and be a regular file.
+ * @param remotePathRaw - Remote destination path. Validated for safety (no traversal attacks).
+ * @param invocationSshUser - Optional invocation-level SSH user override.
+ * @param clock - Clock abstraction for testability; defaults to real wall-clock time.
+ *
+ * @returns On success: the validated remote path in `stdoutLines[0]`, confirming the
+ *   file is now at that location. On error: a typed {@link DevboxError}.
+ *
+ * @throws Never throws — all failures are returned as `Result.err`.
+ *
+ * @remarks
+ * Preconditions:
+ * - `localPath` must point to an existing regular file (not a directory or symlink).
+ * - `remotePathRaw` must pass remote path validation (absolute, no traversal).
+ * - A current box must be selected, running, and SSM-ready.
+ *
+ * Postconditions on success:
+ * - The file exists at the remote destination with correct content.
+ * - `lastConnectAt` is updated in the persisted config.
+ * - All temporary local SSH keys are cleaned up.
+ *
+ * Safety:
+ * - Failed transfers never leave partial content at the final destination
+ *   (upload goes to a temp path, then is atomically moved).
+ * - Temporary keys are cleaned up in the `finally` block on all exit paths.
+ *
+ * Failure forms:
+ * - `ValidationError` — local file missing/not-regular, or remote path unsafe.
+ * - All failures from {@link resolveRemoteAccessPreconditions}.
+ * - `TransportError` — SCP upload or remote finalize command failed.
+ * - `ConsistencyError` — copy succeeded but `lastConnectAt` persistence failed.
+ *
+ * Ordering: local and remote path validation happen before any remote interaction
+ * to fail fast without incurring SSH setup costs.
+ *
+ * Concurrency: not safe to call concurrently for the same box (shares key state).
+ *
+ * @example
+ * ```ts
+ * import { runCpCommand } from "./cp.js";
+ *
+ * const result = await runCpCommand("./config.yaml", "/etc/myapp/config.yaml");
+ * if (!result.ok) {
+ *   console.error(result.error.message);
+ *   process.exit(1);
+ * }
+ * console.log(`File deployed to ${result.value.stdoutLines[0]}`);
+ * ```
  */
 export async function runCpCommand(
   localPath: string,
   remotePathRaw: string,
   invocationSshUser?: string,
+  clock: Clock = REAL_CLOCK,
 ): Promise<CommandResult> {
+  // Step 1: Validate local file before any remote interaction.
+  // Why: fail fast if the source doesn't exist — avoids wasting time on key staging.
   const localValidation = await validateLocalRegularFile(localPath);
   if (!localValidation.ok) {
     return err(localValidation.error);
   }
 
+  // Step 2: Validate remote path safety.
+  // Why: reject path traversal attacks and dangerous destinations before connecting.
   const remotePathResult = parseRemotePath(remotePathRaw);
   if (!remotePathResult.ok) {
     return err(remotePathResult.error);
   }
 
-  const configResult = await loadConfig();
-  if (!configResult.ok) {
-    return err(configResult.error);
+  // Step 3: Resolve all remote-access preconditions (config, state, SSM, key).
+  const preconditionResult = await resolveRemoteAccessPreconditions(invocationSshUser);
+  if (!preconditionResult.ok) {
+    return err(preconditionResult.error);
   }
 
-  const currentResult = resolveCurrentBox(configResult.value);
-  if (!currentResult.ok) {
-    return err(currentResult.error);
-  }
-
-  const sshUserResult = resolveSshUser({
-    box: currentResult.value.box,
-    defaults: configResult.value.defaults,
-    ...(invocationSshUser !== undefined ? { invocationOverride: invocationSshUser } : {}),
-  });
-  if (!sshUserResult.ok) {
-    return err(sshUserResult.error);
-  }
-
-  const describeResult = await describeInstance(currentResult.value.box.instanceId);
-  if (!describeResult.ok) {
-    return err(describeResult.error);
-  }
-  if (describeResult.value.state !== "running") {
-    return err(makeError("InstanceStateError", `cp requires running instance (found ${describeResult.value.state})`));
-  }
-
-  const ssmWaitResult = await waitForSsmOnline(() =>
-    describeSsmPingStatus(describeResult.value.instanceId),
-  );
-  if (!ssmWaitResult.ok) {
-    return err(ssmWaitResult.error);
-  }
-
-  const keyResult = await ensureSshKeyMaterial();
-  if (!keyResult.ok) {
-    return err(keyResult.error);
-  }
-
-  const sshContext: SshContext = {
-    instanceId: describeResult.value.instanceId,
-    sshUser: sshUserResult.value,
-  };
+  const { config, current, sshContext, key } = preconditionResult.value;
 
   try {
-    const stageResult = await stageTemporarySshKey(sshContext, keyResult.value);
-    if (!stageResult.ok) {
-      return err(stageResult.error);
-    }
-
-    const uploadResult = await uploadFileOverScp(
-      sshContext,
-      keyResult.value,
-      localPath,
-    );
+    // Step 4: Upload file via SCP to a temporary remote path.
+    // Why: uploading to a temp path first ensures the final destination is never
+    // left in a partial/corrupt state if the transfer is interrupted.
+    const uploadResult = await uploadFileOverScp(sshContext, key, localPath);
     if (!uploadResult.ok) {
       return err(uploadResult.error);
     }
 
+    // Step 5: Atomically move the uploaded temp file to the final destination.
+    // Why: this is the commit point — only a successful move means the copy succeeded.
     const finalizeResult = await finalizeRemoteFile(
       sshContext,
-      keyResult.value,
+      key,
       uploadResult.value,
       remotePathResult.value,
     );
@@ -110,15 +140,16 @@ export async function runCpCommand(
       return err(finalizeResult.error);
     }
 
+    // Step 6: Record connection timestamp for usage tracking.
     const nextBoxes = {
-      ...configResult.value.boxes,
-      [currentResult.value.alias]: {
-        ...currentResult.value.box,
-        lastConnectAt: new Date().toISOString(),
+      ...config.boxes,
+      [current.alias]: {
+        ...current.box,
+        lastConnectAt: clock.isoNow(),
       },
     };
     const nextConfig: DevboxConfig = {
-      ...configResult.value,
+      ...config,
       boxes: nextBoxes,
     };
     const commitResult = await commitConfig(nextConfig);
@@ -137,6 +168,7 @@ export async function runCpCommand(
       stderrLines: [],
     });
   } finally {
-    await cleanupLocalTempKeys(keyResult.value);
+    // Cleanup is unconditional — keys must be removed regardless of success/failure.
+    await cleanupLocalTempKeys(key);
   }
 }

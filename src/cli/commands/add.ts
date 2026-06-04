@@ -1,7 +1,6 @@
 import { describeInstance } from "../../adapters/aws-cli.js";
 import { commitConfig, loadConfig } from "../../adapters/config-store.js";
 import { ensureAliasAvailable, matchesInstanceIdAdvisoryPattern, parseAlias } from "../../domain/alias.js";
-import { makeError } from "../../domain/errors.js";
 import { err, ok } from "../../domain/result.js";
 import type { DevboxConfig, InstanceId } from "../../domain/types.js";
 import type { CommandResult } from "../context.js";

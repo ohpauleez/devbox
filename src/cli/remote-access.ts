@@ -25,15 +25,15 @@
  * ```
  */
 
-import { describeInstance, describeSsmPingStatus } from "../../adapters/aws-cli.js";
-import { loadConfig } from "../../adapters/config-store.js";
-import { ensureSshKeyMaterial, stageTemporarySshKey, type SshContext, type StagedKey } from "../../adapters/ssh-cli.js";
-import { resolveCurrentBox, type CurrentBox } from "../../domain/context.js";
-import { waitForSsmOnline } from "../../domain/ec2-wait.js";
-import { makeError, type DevboxError } from "../../domain/errors.js";
-import { resolveSshUser } from "../../domain/ssh-user.js";
-import { err, ok, type Result } from "../../domain/result.js";
-import type { DevboxConfig, SshUser } from "../../domain/types.js";
+import { describeInstance, describeSsmPingStatus } from "../adapters/aws-cli.js";
+import { loadConfig } from "../adapters/config-store.js";
+import { ensureSshKeyMaterial, stageTemporarySshKey, type SshContext, type StagedKey } from "../adapters/ssh-cli.js";
+import { resolveCurrentBox, type CurrentBox } from "../domain/context.js";
+import { waitForSsmOnline } from "../domain/ec2-wait.js";
+import { makeError, type DevboxError } from "../domain/errors.js";
+import { resolveSshUser } from "../domain/ssh-user.js";
+import { err, ok, type Result } from "../domain/result.js";
+import type { DevboxConfig, SshUser } from "../domain/types.js";
 
 /**
  * Fully resolved remote-access context after all preconditions are satisfied.

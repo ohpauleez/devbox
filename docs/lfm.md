@@ -6,7 +6,7 @@ Lightweight formal methods are not about proving an entire system correct. They 
 
 Recent industrial examples converge on the same pattern. Brooker emphasizes [invariant-first reasoning](https://brooker.co.za/blog/2023/07/28/ds-testing.html). AWS/S3 shows that a live product team can [use executable reference models](https://www.amazon.science/publications/using-lightweight-formal-methods-to-validate-a-key-value-storage-node-in-amazon-s3) and automated checks without aiming for full formal verification. Cedar shows [verification-guided development](https://www.amazon.science/publications/how-we-built-cedar-a-verification-guided-approach) around an executable model, proofs, differential random testing, and property-based testing. Datadog/`redis-rust` shows the [same idea in the age of agents](https://www.datadoghq.com/blog/ai/harness-first-agents/): generated code must answer to objective, mechanical pass/fail checks, and the verification harness matters as much as the implementation.
 
-In a spec-driven and agent-assisted workflow, this matters even more. Code is cheaper to generate. Trust is not.
+In a spec-driven and agent-assisted workflow, this matters even more. Code is cheaper to generate, but trust is not.
 
 ## Direct evidence is best
 
@@ -78,7 +78,7 @@ The model is not the product. It enables us to see how a design withstands reali
 
 Depending on the problem, the model might be:
 
-- a small executable program in the host language (Java, Rust, etc.);
+- a small executable program in the host language (Java, Rust, TypeScript, etc.);
 - a model in a verification-oriented language ([Alloy](https://practicalalloy.github.io/index.html), [TLA+](https://learntla.com/), Lean);
 - a state table or algebraic model for a narrow kernel;
 - a simplified protocol model for concurrency, recovery, or permissions.
@@ -100,7 +100,7 @@ Prefer:
 
 Decoupling and simplicity are not aesthetic preferences. They lower the cost of assurance by localizing critical properties. If a property is spread across the whole codebase, the whole codebase becomes critical. If it is localized to one component or one interaction boundary, verification and review can focus there.
 
-This is why there is emphasis on deterministic systems, state machines, explicit error handling, and strong contracts in [`docs/java_style.md`](java_style.md) and [`docs/state_machines.md`](state_machines.md). Those guides explain how to write the code. This guide explains why that shape matters and how to drive it from the spec.
+This is why there is emphasis on deterministic systems, state machines, explicit error handling, and strong contracts in [`docs/typescript_style.md`](typescript_style.md) and [`docs/state_machines.md`](state_machines.md). Those guides explain how to write the code. This guide explains why that shape matters and how to drive it from the spec.
 
 ## Connect the model to the implementation
 
@@ -134,7 +134,7 @@ A typical verification pyramid looks like this:
 
 Use the lightest mechanism that can falsify the current hypothesis, then layer stronger mechanisms where the risk justifies them.
 
-For a Java-based project, that usually means JUnit for examples and regressions, jqwik for generated histories, Fray for concurrency schedules, and OpenJML for contracts and extended static checking, as described in [`docs/java_style.md`](java_style.md).
+For a TypeScript-based project, that usually means Vitest for examples and regressions, fast-check for generated histories and metamorphic testing, and [LemmaScript](https://lemmascript.com/) for contracts and extended static checking, as described in [`docs/typescript_style.md`](typescript_style.md).
 
 ## Testing remains essential, but it is not enough
 
@@ -255,7 +255,7 @@ Archive the change with its spec artifacts, model, contracts, tests, and review 
 
 This guide explains the workflow and the evidence model.
 
-- [`docs/java_style.md`](java_style.md) explains how these ideas should show up in code: deterministic systems, explicit types, assertions, contracts, simulation, differential testing, concurrency discipline, and strong tooling.
+- [`docs/typescript_style.md`](typescript_style.md) explains how these ideas should show up in code: deterministic systems, explicit types, assertions, contracts, simulation, differential testing, concurrency discipline, and strong tooling.
 - [`docs/state_machines.md`](state_machines.md) explains one of the most useful implementation styles for making states, transitions, and invariants explicit.
 
 Use this guide to decide what artifacts to create, what claims to make, and what evidence to demand. Use those guides to shape the implementation that follows.

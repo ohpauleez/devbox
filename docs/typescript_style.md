@@ -217,6 +217,7 @@ Suggested stack in this repo:
 
 - Vitest for examples and regression tests
 - `fast-check` for generated histories and metamorphic tests
+- [LemmaScript](https://lemmascript.com/) for method-level contracts and system invariants
 - fake timers for time-based logic
 - lightweight model implementations for differential testing
 - fuzzing at parsing and protocol boundaries where practical
@@ -379,7 +380,7 @@ Documentation is part of the safety case. It must make the intended semantics, c
 
 #### TSDoc requirements
 
-All functions, methods, classes, interfaces, types, and non-trivial methods on exported classes must have TSDoc.
+All functions, methods classes, interfaces, and types must have TSDoc.
 
 For functions and methods, TSDoc must document:
 
@@ -521,7 +522,7 @@ The unsafe cast is acceptable here only because it is hidden behind validation a
 - Are `unknown` values validated at boundaries before use?
 - Are `as` assertions and non-null assertions rare, justified, and localized?
 - Are preconditions, postconditions, invariants, and exhaustiveness asserted?
-- Is TSDoc present and complete for exported APIs, including failures, safety requirements, and semantic constraints?
+- Is TSDoc present and complete for functions and methods, including failures, safety requirements, and semantic constraints?
 - Do line comments explain why the code is written this way, especially in subtle or performance-critical sections?
 - Is arithmetic checked where precision, overflow, rounding, or off-by-one errors matter?
 - Are bounds explicit everywhere?

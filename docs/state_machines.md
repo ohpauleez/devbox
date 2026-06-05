@@ -42,6 +42,7 @@ interface Order {
   readonly id: string;
   readonly cents: number;
   state: OrderState;
+  readonly trackingId?: string; // present only in "shipped" — not enforced by the type
 }
 
 function createOrder(id: string, cents: number): Order {
@@ -62,6 +63,29 @@ function advance(order: Order): Order {
     }
   }
 }
+
+// Transitions can also be encoded as dedicated "Event" types if the state machine requires a richer set of transition paths
+
+type OrderEvent =
+  | { readonly type: "PAY" }
+  | { readonly type: "SHIP"; readonly trackingId: string };
+
+function transition(order: Order, event: OrderEvent): Order {
+  switch (order.state) {
+    case "draft":
+      if (event.type === "PAY") return { ...order, state: "paid" };
+      break;
+    case "paid":
+      if (event.type === "SHIP") return { ...order, state: "shipped", trackingId: event.trackingId };
+      break;
+    case "shipped":
+      throw new Error("SHIPPED is terminal");
+    default: {
+      const _exhaustive: never = order.state;
+      throw new Error(`Unknown state: ${_exhaustive}`);
+    }
+  }
+  throw new Error(`Invalid event "${event.type}" in state "${order.state}"`);
 ```
 
 **Rich tagged-union variant** — each state carries state-specific data and transitions are narrowed by input type:

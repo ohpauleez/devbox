@@ -24,7 +24,14 @@
  */
 
 import type { Ec2InstanceState } from "../domain/instance-state.js";
-import { makeError, type DevboxError } from "../domain/errors.js";
+import {
+  makeTypedError,
+  type AwsCliError,
+  type AwsReadError,
+  type AwsWriteError,
+  type DependencyError,
+} from "../domain/errors.js";
+import { assertNever } from "../domain/assert.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { runProcess } from "./process.js";
 
@@ -88,26 +95,31 @@ function detectAwsError(stderrLines: readonly string[]): AwsErrorInfo {
   return { stderrLines };
 }
 
-function parseJson<T>(raw: string, context: string): Result<T, DevboxError> {
+function parseJson<T>(raw: string, context: string): Result<T, AwsCliError> {
   try {
     return ok(JSON.parse(raw) as T);
   } catch (error: unknown) {
-    return err(makeError("AwsCliError", `${context} returned invalid JSON`, [`${error}`]));
+    return err(makeTypedError("AwsCliError", `${context} returned invalid JSON`, [`${error}`]));
   }
 }
 
-async function runAwsJson(args: readonly string[]): Promise<Result<unknown, DevboxError>> {
+async function runAwsJson(args: readonly string[]): Promise<Result<unknown, AwsReadError>> {
   const processResult = await runProcess("aws", args);
   if (!processResult.ok) {
-    if (processResult.error.category === "DependencyError") {
-      return processResult;
+    switch (processResult.error.category) {
+      case "DependencyError":
+        return err(processResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(processResult.error);
     }
     const details = processResult.error.details ?? [];
     const awsErrorInfo = detectAwsError(details);
     if (awsErrorInfo.code === "InvalidInstanceID.NotFound") {
-      return err(makeError("NotFoundError", "instance not found in active AWS account/region", details));
+      return err(makeTypedError("NotFoundError", "instance not found in active AWS account/region", details));
     }
-    return err(makeError("AwsCliError", "AWS CLI command failed", details));
+    return err(makeTypedError("AwsCliError", "AWS CLI command failed", details));
   }
 
   return parseJson(processResult.value.stdout, "AWS CLI command");
@@ -147,7 +159,7 @@ function flattenReservations(payload: unknown): readonly Record<string, unknown>
   return instances;
 }
 
-function parseInstanceDescription(raw: Record<string, unknown>): Result<InstanceDescription, DevboxError> {
+function parseInstanceDescription(raw: Record<string, unknown>): Result<InstanceDescription, AwsCliError> {
   const instanceId = raw.InstanceId;
   const instanceType = raw.InstanceType;
   const stateName =
@@ -156,10 +168,10 @@ function parseInstanceDescription(raw: Record<string, unknown>): Result<Instance
       : undefined;
 
   if (typeof instanceId !== "string") {
-    return err(makeError("AwsCliError", "AWS describe-instances response missing InstanceId"));
+    return err(makeTypedError("AwsCliError", "AWS describe-instances response missing InstanceId"));
   }
   if (typeof instanceType !== "string") {
-    return err(makeError("AwsCliError", "AWS describe-instances response missing InstanceType"));
+    return err(makeTypedError("AwsCliError", "AWS describe-instances response missing InstanceType"));
   }
 
   return ok({
@@ -199,7 +211,7 @@ function parseInstanceDescription(raw: Record<string, unknown>): Result<Instance
  */
 export async function describeInstances(
   instanceIds: readonly string[],
-): Promise<Result<ReadonlyMap<string, InstanceDescription>, DevboxError>> {
+): Promise<Result<ReadonlyMap<string, InstanceDescription>, AwsReadError>> {
   if (instanceIds.length === 0) {
     return ok(new Map());
   }
@@ -251,14 +263,14 @@ export async function describeInstances(
  * }
  * ```
  */
-export async function describeInstance(instanceId: string): Promise<Result<InstanceDescription, DevboxError>> {
+export async function describeInstance(instanceId: string): Promise<Result<InstanceDescription, AwsReadError>> {
   const descriptionsResult = await describeInstances([instanceId]);
   if (!descriptionsResult.ok) {
     return descriptionsResult;
   }
   const found = descriptionsResult.value.get(instanceId);
   if (found === undefined) {
-    return err(makeError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`));
+    return err(makeTypedError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`));
   }
   return ok(found);
 }
@@ -287,7 +299,7 @@ export async function describeInstance(instanceId: string): Promise<Result<Insta
  * }
  * ```
  */
-export async function startInstance(instanceId: string): Promise<Result<void, DevboxError>> {
+export async function startInstance(instanceId: string): Promise<Result<void, AwsWriteError>> {
   const processResult = await runProcess("aws", [
     "ec2",
     "start-instances",
@@ -297,15 +309,20 @@ export async function startInstance(instanceId: string): Promise<Result<void, De
     "json",
   ]);
   if (!processResult.ok) {
-    if (processResult.error.category === "DependencyError") {
-      return processResult;
+    switch (processResult.error.category) {
+      case "DependencyError":
+        return err(processResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(processResult.error);
     }
     const details = processResult.error.details ?? [];
     const awsErrorInfo = detectAwsError(details);
     if (awsErrorInfo.code === "InvalidInstanceID.NotFound") {
-      return err(makeError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`, details));
+      return err(makeTypedError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`, details));
     }
-    return err(makeError("AwsCliError", `failed to start instance: ${instanceId}`, details));
+    return err(makeTypedError("AwsCliError", `failed to start instance: ${instanceId}`, details));
   }
   return ok(undefined);
 }
@@ -334,7 +351,7 @@ export async function startInstance(instanceId: string): Promise<Result<void, De
  * }
  * ```
  */
-export async function stopInstance(instanceId: string): Promise<Result<void, DevboxError>> {
+export async function stopInstance(instanceId: string): Promise<Result<void, AwsWriteError>> {
   const processResult = await runProcess("aws", [
     "ec2",
     "stop-instances",
@@ -344,15 +361,20 @@ export async function stopInstance(instanceId: string): Promise<Result<void, Dev
     "json",
   ]);
   if (!processResult.ok) {
-    if (processResult.error.category === "DependencyError") {
-      return processResult;
+    switch (processResult.error.category) {
+      case "DependencyError":
+        return err(processResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(processResult.error);
     }
     const details = processResult.error.details ?? [];
     const awsErrorInfo = detectAwsError(details);
     if (awsErrorInfo.code === "InvalidInstanceID.NotFound") {
-      return err(makeError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`, details));
+      return err(makeTypedError("NotFoundError", `instance not found in active AWS account/region: ${instanceId}`, details));
     }
-    return err(makeError("AwsCliError", `failed to stop instance: ${instanceId}`, details));
+    return err(makeTypedError("AwsCliError", `failed to stop instance: ${instanceId}`, details));
   }
   return ok(undefined);
 }
@@ -381,7 +403,7 @@ export async function stopInstance(instanceId: string): Promise<Result<void, Dev
  * }
  * ```
  */
-export async function terminateInstance(instanceId: string): Promise<Result<"terminated" | "already-absent", DevboxError>> {
+export async function terminateInstance(instanceId: string): Promise<Result<"terminated" | "already-absent", DependencyError | AwsCliError>> {
   const processResult = await runProcess("aws", [
     "ec2",
     "terminate-instances",
@@ -391,15 +413,20 @@ export async function terminateInstance(instanceId: string): Promise<Result<"ter
     "json",
   ]);
   if (!processResult.ok) {
-    if (processResult.error.category === "DependencyError") {
-      return processResult;
+    switch (processResult.error.category) {
+      case "DependencyError":
+        return err(processResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(processResult.error);
     }
     const details = processResult.error.details ?? [];
     const awsErrorInfo = detectAwsError(details);
     if (awsErrorInfo.code === "InvalidInstanceID.NotFound") {
       return ok("already-absent");
     }
-    return err(makeError("AwsCliError", `failed to terminate instance: ${instanceId}`, details));
+    return err(makeTypedError("AwsCliError", `failed to terminate instance: ${instanceId}`, details));
   }
   return ok("terminated");
 }
@@ -432,7 +459,7 @@ export async function terminateInstance(instanceId: string): Promise<Result<"ter
  */
 export async function runInstances(
   request: RunInstancesRequest,
-): Promise<Result<{ readonly instanceId: string }, DevboxError>> {
+): Promise<Result<{ readonly instanceId: string }, DependencyError | AwsCliError>> {
   const processResult = await runProcess("aws", [
     "ec2",
     "run-instances",
@@ -442,10 +469,15 @@ export async function runInstances(
     "json",
   ]);
   if (!processResult.ok) {
-    if (processResult.error.category === "DependencyError") {
-      return processResult;
+    switch (processResult.error.category) {
+      case "DependencyError":
+        return err(processResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(processResult.error);
     }
-    return err(makeError("AwsCliError", "failed to launch instance", processResult.error.details ?? []));
+    return err(makeTypedError("AwsCliError", "failed to launch instance", processResult.error.details ?? []));
   }
 
   const parsed = parseJson<{ Instances?: readonly { InstanceId?: unknown }[] }>(
@@ -458,11 +490,11 @@ export async function runInstances(
 
   const instances = parsed.value.Instances;
   if (!Array.isArray(instances) || instances.length !== 1) {
-    return err(makeError("AwsCliError", "run-instances did not return exactly one instance"));
+    return err(makeTypedError("AwsCliError", "run-instances did not return exactly one instance"));
   }
   const instanceId = instances[0]?.InstanceId;
   if (typeof instanceId !== "string") {
-    return err(makeError("AwsCliError", "run-instances response missing instance id"));
+    return err(makeTypedError("AwsCliError", "run-instances response missing instance id"));
   }
 
   return ok({ instanceId });
@@ -494,7 +526,7 @@ export async function runInstances(
  */
 export async function describeSsmPingStatus(
   instanceId: string,
-): Promise<Result<"Online" | "ConnectionLost" | "Inactive" | undefined, DevboxError>> {
+): Promise<Result<"Online" | "ConnectionLost" | "Inactive" | undefined, AwsReadError>> {
   const jsonResult = await runAwsJson([
     "ssm",
     "describe-instance-information",
@@ -508,7 +540,7 @@ export async function describeSsmPingStatus(
   }
 
   if (typeof jsonResult.value !== "object" || jsonResult.value === null) {
-    return err(makeError("AwsCliError", "invalid SSM response shape"));
+    return err(makeTypedError("AwsCliError", "invalid SSM response shape"));
   }
   const list = (jsonResult.value as { InstanceInformationList?: unknown }).InstanceInformationList;
   if (!Array.isArray(list) || list.length === 0) {

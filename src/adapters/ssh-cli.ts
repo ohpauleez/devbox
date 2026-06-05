@@ -36,7 +36,12 @@ import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
-import { makeError, type DevboxError } from "../domain/errors.js";
+import {
+  makeTypedError,
+  type RemoteTransportError,
+  type ValidationError,
+} from "../domain/errors.js";
+import { assertNever } from "../domain/assert.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { runProcess } from "./process.js";
 
@@ -173,15 +178,15 @@ function ssmProxyCommand(instanceId: string): string {
  * }
  * ```
  */
-export async function validateLocalRegularFile(filePath: string): Promise<Result<void, DevboxError>> {
+export async function validateLocalRegularFile(filePath: string): Promise<Result<void, ValidationError>> {
   try {
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) {
-      return err(makeError("ValidationError", `local path is not a regular file: ${filePath}`));
+      return err(makeTypedError("ValidationError", `local path is not a regular file: ${filePath}`));
     }
     return ok(undefined);
   } catch (error: unknown) {
-    return err(makeError("ValidationError", `local file is not readable: ${filePath}`, [`${error}`]));
+    return err(makeTypedError("ValidationError", `local file is not readable: ${filePath}`, [`${error}`]));
   }
 }
 
@@ -216,7 +221,7 @@ export async function validateLocalRegularFile(filePath: string): Promise<Result
  * }
  * ```
  */
-export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, DevboxError>> {
+export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTransportError>> {
   const agentResult = await runProcess("ssh-add", ["-l"]);
   if (agentResult.ok) {
     return ok({
@@ -240,10 +245,15 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, DevboxEr
     "ssh-over-ssm",
   ]);
   if (!keygenResult.ok) {
-    if (keygenResult.error.category === "DependencyError") {
-      return keygenResult;
+    switch (keygenResult.error.category) {
+      case "DependencyError":
+        return err(keygenResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(keygenResult.error);
     }
-    return err(makeError("TransportError", "failed to generate temporary ssh key", keygenResult.error.details));
+    return err(makeTypedError("TransportError", "failed to generate temporary ssh key", keygenResult.error.details));
   }
 
   // Register for signal-based cleanup before returning, so interrupted sessions
@@ -303,7 +313,7 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, DevboxEr
 export async function stageTemporarySshKey(
   context: SshContext,
   key: StagedKey,
-): Promise<Result<void, DevboxError>> {
+): Promise<Result<void, RemoteTransportError>> {
   const keySourcePath = key.fromAgent ? "$(ssh-add -L | head -n1)" : `$(cat ${shellQuote(key.publicKeyPath)})`;
 
   const remoteCommand = [
@@ -333,10 +343,15 @@ export async function stageTemporarySshKey(
   ]);
 
   if (!result.ok) {
-    if (result.error.category === "DependencyError") {
-      return result;
+    switch (result.error.category) {
+      case "DependencyError":
+        return err(result.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(result.error);
     }
-    return err(makeError("TransportError", "failed to stage temporary SSH key", result.error.details));
+    return err(makeTypedError("TransportError", "failed to stage temporary SSH key", result.error.details));
   }
   return ok(undefined);
 }
@@ -387,7 +402,7 @@ function commonSshArgs(context: SshContext, key: StagedKey): string[] {
 export async function startInteractiveSsh(
   context: SshContext,
   key: StagedKey,
-): Promise<Result<number, DevboxError>> {
+): Promise<Result<number, RemoteTransportError>> {
   const args = [
     ...commonSshArgs(context, key),
     `${context.sshUser}@${context.instanceId}`,
@@ -398,17 +413,17 @@ export async function startInteractiveSsh(
     child.on("error", (error) => {
       const nodeError = error as NodeJS.ErrnoException;
       if (nodeError.code === "ENOENT") {
-        resolve(err(makeError("DependencyError", "required executable not found: ssh")));
+        resolve(err(makeTypedError("DependencyError", "required executable not found: ssh")));
         return;
       }
-      resolve(err(makeError("TransportError", "failed to start ssh session", [`${error}`])));
+      resolve(err(makeTypedError("TransportError", "failed to start ssh session", [`${error}`])));
     });
     child.on("close", (code, signal) => {
       if (typeof code === "number") {
         resolve(ok(code));
         return;
       }
-      resolve(err(makeError("TransportError", `ssh session terminated by signal: ${signal ?? "unknown"}`)));
+      resolve(err(makeTypedError("TransportError", `ssh session terminated by signal: ${signal ?? "unknown"}`)));
     });
   });
 }
@@ -447,7 +462,7 @@ export async function uploadFileOverScp(
   context: SshContext,
   key: StagedKey,
   localPath: string,
-): Promise<Result<string, DevboxError>> {
+): Promise<Result<string, RemoteTransportError>> {
   const remoteTempPath = `/tmp/devbox-upload-${randomUUID()}-${basename(localPath)}`;
   const target = `${context.sshUser}@${context.instanceId}:${remoteTempPath}`;
   const result = await runProcess("scp", [
@@ -456,10 +471,15 @@ export async function uploadFileOverScp(
     target,
   ]);
   if (!result.ok) {
-    if (result.error.category === "DependencyError") {
-      return result;
+    switch (result.error.category) {
+      case "DependencyError":
+        return err(result.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(result.error);
     }
-    return err(makeError("TransportError", "scp upload failed", result.error.details));
+    return err(makeTypedError("TransportError", "scp upload failed", result.error.details));
   }
   return ok(remoteTempPath);
 }
@@ -499,7 +519,7 @@ export async function finalizeRemoteFile(
   key: StagedKey,
   tempPath: string,
   finalPath: string,
-): Promise<Result<void, DevboxError>> {
+): Promise<Result<void, RemoteTransportError>> {
   const finalDir = dirname(finalPath);
   const command = `set -eu; mkdir -p ${shellQuote(finalDir)}; mv ${shellQuote(tempPath)} ${shellQuote(finalPath)}`;
   const result = await runProcess("ssh", [
@@ -508,10 +528,15 @@ export async function finalizeRemoteFile(
     command,
   ]);
   if (!result.ok) {
-    if (result.error.category === "DependencyError") {
-      return result;
+    switch (result.error.category) {
+      case "DependencyError":
+        return err(result.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(result.error);
     }
-    return err(makeError("TransportError", "remote file finalization failed", result.error.details));
+    return err(makeTypedError("TransportError", "remote file finalization failed", result.error.details));
   }
   return ok(undefined);
 }

@@ -1,6 +1,6 @@
 import type { InstanceDescription } from "../adapters/aws-cli.js";
 import type { Ec2InstanceState } from "./instance-state.js";
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type AwsReadError, type TimeoutError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import { EC2_POLL_INTERVAL_MS, EC2_WAIT_TIMEOUT_MS, SSM_POLL_INTERVAL_MS, SSM_WAIT_TIMEOUT_MS, REAL_CLOCK, type Clock } from "./wait-policy.js";
 
@@ -17,7 +17,7 @@ function sleep(ms: number): Promise<void> {
  * Injected to keep domain logic free of direct adapter imports.
  * Implementations must return the current instance description or an error.
  */
-export type DescribeInstanceFn = (instanceId: string) => Promise<Result<InstanceDescription, DevboxError>>;
+export type DescribeInstanceFn = (instanceId: string) => Promise<Result<InstanceDescription, AwsReadError>>;
 
 /**
  * Adapter function signature for querying SSM ping status.
@@ -26,7 +26,7 @@ export type DescribeInstanceFn = (instanceId: string) => Promise<Result<Instance
  * Injected to keep domain logic free of direct adapter imports.
  * Returns "Online", "ConnectionLost", "Inactive", or undefined (not yet registered).
  */
-export type DescribeSsmStatusFn = () => Promise<Result<"Online" | "ConnectionLost" | "Inactive" | undefined, DevboxError>>;
+export type DescribeSsmStatusFn = () => Promise<Result<"Online" | "ConnectionLost" | "Inactive" | undefined, AwsReadError>>;
 
 /**
  * Input for EC2 state polling.
@@ -85,7 +85,7 @@ export async function waitForEc2TargetState(
   input: WaitEc2TargetInput,
   describe: DescribeInstanceFn,
   clock: Clock = REAL_CLOCK,
-): Promise<Result<WaitEc2TargetSuccess, DevboxError>> {
+): Promise<Result<WaitEc2TargetSuccess, AwsReadError | TimeoutError>> {
   const startedAtMs = clock.nowMs();
   let lastObservedState: Ec2InstanceState = "unknown";
 
@@ -109,7 +109,7 @@ export async function waitForEc2TargetState(
   }
 
   return err(
-    makeError(
+    makeTypedError(
       "TimeoutError",
       `instance ${input.instanceId} did not reach ${input.expectedState} within ${Math.floor(EC2_WAIT_TIMEOUT_MS / 1000)}s (last: ${lastObservedState})`,
     ),
@@ -142,7 +142,7 @@ export async function waitForEc2TargetState(
 export async function waitForSsmOnline(
   getStatus: DescribeSsmStatusFn,
   clock: Clock = REAL_CLOCK,
-): Promise<Result<void, DevboxError>> {
+): Promise<Result<void, AwsReadError | TimeoutError>> {
   const startedAtMs = clock.nowMs();
   // Goal: poll until SSM reports "Online" or time runs out.
   while (clock.nowMs() - startedAtMs <= SSM_WAIT_TIMEOUT_MS) {
@@ -158,5 +158,5 @@ export async function waitForSsmOnline(
     await sleep(SSM_POLL_INTERVAL_MS);
   }
 
-  return err(makeError("TimeoutError", "instance did not become SSM-ready within 120s"));
+  return err(makeTypedError("TimeoutError", "instance did not become SSM-ready within 120s"));
 }

@@ -1,5 +1,5 @@
 import { assertNever } from "./assert.js";
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type InstanceStateError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 
 /**
@@ -72,7 +72,7 @@ export interface DownDecision {
  * // errResult.error.category === "InstanceStateError"
  * ```
  */
-export function decideUpAction(state: Ec2InstanceState): Result<UpDecision, DevboxError> {
+export function decideUpAction(state: Ec2InstanceState): Result<UpDecision, InstanceStateError> {
   switch (state) {
     case "running":
       return ok({ targetState: "running", submitStart: false, wait: false });
@@ -82,11 +82,11 @@ export function decideUpAction(state: Ec2InstanceState): Result<UpDecision, Devb
       return ok({ targetState: "running", submitStart: true, wait: true });
     case "shutting-down":
     case "terminated":
-      return err(makeError("InstanceStateError", `cannot run up from instance state: ${state}`));
+      return err(makeTypedError("InstanceStateError", `cannot run up from instance state: ${state}`));
     case "stopping":
-      return err(makeError("InstanceStateError", "cannot run up while instance is stopping"));
+      return err(makeTypedError("InstanceStateError", "cannot run up while instance is stopping"));
     case "unknown":
-      return err(makeError("InstanceStateError", "cannot run up from unknown instance state"));
+      return err(makeTypedError("InstanceStateError", "cannot run up from unknown instance state"));
     default:
       return assertNever(state);
   }
@@ -118,7 +118,7 @@ export function decideUpAction(state: Ec2InstanceState): Result<UpDecision, Devb
  * // errResult.error.category === "InstanceStateError"
  * ```
  */
-export function decideDownAction(state: Ec2InstanceState): Result<DownDecision, DevboxError> {
+export function decideDownAction(state: Ec2InstanceState): Result<DownDecision, InstanceStateError> {
   switch (state) {
     case "stopped":
       return ok({ targetState: "stopped", submitStop: false, wait: false });
@@ -128,11 +128,11 @@ export function decideDownAction(state: Ec2InstanceState): Result<DownDecision, 
       return ok({ targetState: "stopped", submitStop: true, wait: true });
     case "shutting-down":
     case "terminated":
-      return err(makeError("InstanceStateError", `cannot run down from instance state: ${state}`));
+      return err(makeTypedError("InstanceStateError", `cannot run down from instance state: ${state}`));
     case "pending":
-      return err(makeError("InstanceStateError", "cannot run down while instance is pending"));
+      return err(makeTypedError("InstanceStateError", "cannot run down while instance is pending"));
     case "unknown":
-      return err(makeError("InstanceStateError", "cannot run down from unknown instance state"));
+      return err(makeTypedError("InstanceStateError", "cannot run down from unknown instance state"));
     default:
       return assertNever(state);
   }

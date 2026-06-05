@@ -12,7 +12,7 @@
  * 4. Non-instance TagSpecifications (e.g., volume tags) are preserved verbatim.
  */
 
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type ValidationError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import { mergeRequiredTags, validateRequiredTags } from "./tags.js";
 import type { DefaultsConfig, RequiredTags } from "./types.js";
@@ -116,20 +116,20 @@ function preserveNonInstanceTagSpecs(tagSpecifications: unknown): readonly unkno
   return result;
 }
 
-function validateTemplateShape(template: Record<string, unknown>): Result<void, DevboxError> {
+function validateTemplateShape(template: Record<string, unknown>): Result<void, ValidationError> {
   for (const key of Object.keys(template)) {
     if (key === "InstanceRequirements") {
-      return err(makeError("ValidationError", "template key InstanceRequirements is not supported"));
+      return err(makeTypedError("ValidationError", "template key InstanceRequirements is not supported"));
     }
     if (!ALLOWED_TEMPLATE_KEYS.has(key)) {
-      return err(makeError("ValidationError", `unknown template top-level key: ${key}`));
+      return err(makeTypedError("ValidationError", `unknown template top-level key: ${key}`));
     }
   }
 
   if (template.NetworkInterfaces !== undefined) {
     if (template.SecurityGroupIds !== undefined || template.SecurityGroups !== undefined) {
       return err(
-        makeError(
+        makeTypedError(
           "ValidationError",
           "template with NetworkInterfaces must not use top-level SecurityGroupIds/SecurityGroups",
         ),
@@ -139,7 +139,7 @@ function validateTemplateShape(template: Record<string, unknown>): Result<void, 
   return ok(undefined);
 }
 
-function parseMergedRequiredTags(mergedMap: Record<string, string>): Result<RequiredTags, DevboxError> {
+function parseMergedRequiredTags(mergedMap: Record<string, string>): Result<RequiredTags, ValidationError> {
   const env = mergedMap.env;
   const service = mergedMap.service;
   const version = mergedMap.version;
@@ -152,7 +152,7 @@ function parseMergedRequiredTags(mergedMap: Record<string, string>): Result<Requ
     typeof customerData !== "string" ||
     typeof team !== "string"
   ) {
-    return err(makeError("ValidationError", "merged tags are missing required keys"));
+    return err(makeTypedError("ValidationError", "merged tags are missing required keys"));
   }
 
   const requiredTags: RequiredTags = {
@@ -164,7 +164,7 @@ function parseMergedRequiredTags(mergedMap: Record<string, string>): Result<Requ
   };
   const validation = validateRequiredTags(requiredTags);
   if (!validation.ok) {
-    return err(makeError("ValidationError", validation.error.message));
+    return err(makeTypedError("ValidationError", validation.error.message));
   }
   return ok(requiredTags);
 }
@@ -209,9 +209,9 @@ export function mapInitTemplateToRunInstances(
   alias: string,
   template: unknown,
   defaults: DefaultsConfig,
-): Result<InitRunInstancesRequest, DevboxError> {
+): Result<InitRunInstancesRequest, ValidationError> {
   if (!isRecord(template)) {
-    return err(makeError("ValidationError", "template must be a JSON object"));
+    return err(makeTypedError("ValidationError", "template must be a JSON object"));
   }
 
   // Step 1: Validate template shape — reject unknown or conflicting keys early.
@@ -228,10 +228,10 @@ export function mapInitTemplateToRunInstances(
     : defaults.IamInstanceProfile;
 
   if (typeof imageId !== "string" || imageId.trim().length === 0) {
-    return err(makeError("ValidationError", "ImageId is required after merge"));
+    return err(makeTypedError("ValidationError", "ImageId is required after merge"));
   }
   if (!isRecord(iamProfile)) {
-    return err(makeError("ValidationError", "IamInstanceProfile is required after merge"));
+    return err(makeTypedError("ValidationError", "IamInstanceProfile is required after merge"));
   }
 
   // Step 4: Merge tags with layered precedence.

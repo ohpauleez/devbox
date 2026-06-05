@@ -1,4 +1,4 @@
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type ValidationError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import type { BoxConfig, DefaultsConfig, SshUser } from "./types.js";
 
@@ -52,7 +52,7 @@ export interface SshUserResolutionInput {
  * // result.value === "ubuntu" (invocation override wins)
  * ```
  */
-export function resolveSshUser(input: SshUserResolutionInput): Result<SshUser, DevboxError> {
+export function resolveSshUser(input: SshUserResolutionInput): Result<SshUser, ValidationError> {
   // Validate invocation override explicitly before precedence resolution.
   // Box and defaults values are already validated during config parsing.
   if (input.invocationOverride !== undefined) {
@@ -61,7 +61,7 @@ export function resolveSshUser(input: SshUserResolutionInput): Result<SshUser, D
       // Fall through to next precedence level
     } else if (!SSH_USER_PATTERN.test(trimmed)) {
       return err(
-        makeError(
+        makeTypedError(
           "ValidationError",
           "ssh user override contains invalid characters (whitespace or control characters not allowed)",
         ),
@@ -75,7 +75,7 @@ export function resolveSshUser(input: SshUserResolutionInput): Result<SshUser, D
 
   if (candidate === undefined || candidate.length === 0) {
     return err(
-      makeError(
+      makeTypedError(
         "ValidationError",
         "ssh user is required; provide --ssh-user, boxes.<alias>.sshUser, or defaults.sshUser",
       ),

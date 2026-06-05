@@ -1,4 +1,4 @@
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type ValidationError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 
 /**
@@ -36,13 +36,13 @@ const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/;
  * // bad.error.category === "ValidationError"
  * ```
  */
-export function parseRemotePath(raw: string): Result<RemotePath, DevboxError> {
+export function parseRemotePath(raw: string): Result<RemotePath, ValidationError> {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
-    return err(makeError("ValidationError", "remote path must not be empty"));
+    return err(makeTypedError("ValidationError", "remote path must not be empty"));
   }
   if (CONTROL_CHAR_PATTERN.test(trimmed)) {
-    return err(makeError("ValidationError", "remote path must not contain control characters"));
+    return err(makeTypedError("ValidationError", "remote path must not contain control characters"));
   }
   return ok(trimmed as RemotePath);
 }

@@ -44,7 +44,7 @@ import {
   serializeConfig,
   synthesizeFirstRunConfig,
 } from "../domain/config-schema.js";
-import { makeError, type DevboxError } from "../domain/errors.js";
+import { makeTypedError, type ConfigError } from "../domain/errors.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { CONFIG_LOCK_STALE_AFTER_MS } from "../domain/wait-policy.js";
 import type { DevboxConfig } from "../domain/types.js";
@@ -91,12 +91,12 @@ export function defaultConfigStorePaths(): ConfigStorePaths {
   };
 }
 
-async function ensureDirectory(paths: ConfigStorePaths): Promise<Result<void, DevboxError>> {
+async function ensureDirectory(paths: ConfigStorePaths): Promise<Result<void, ConfigError>> {
   try {
     await mkdir(paths.directory, { recursive: true, mode: CONFIG_FILE_MODE });
     return ok(undefined);
   } catch (error: unknown) {
-    return err(makeError("ConfigError", "failed to create config directory", [`${error}`]));
+    return err(makeTypedError("ConfigError", "failed to create config directory", [`${error}`]));
   }
 }
 
@@ -140,7 +140,7 @@ function isProcessAlive(pid: number): boolean {
  *
  * Returns `ok(false)` if the lock file doesn't exist (ENOENT), meaning there's nothing stale.
  */
-async function isLockStale(paths: ConfigStorePaths): Promise<Result<boolean, DevboxError>> {
+async function isLockStale(paths: ConfigStorePaths): Promise<Result<boolean, ConfigError>> {
   try {
     const [raw, lockStat] = await Promise.all([
       readFile(paths.lockFile, "utf8"),
@@ -164,7 +164,7 @@ async function isLockStale(paths: ConfigStorePaths): Promise<Result<boolean, Dev
     if (nodeError.code === "ENOENT") {
       return ok(false);
     }
-    return err(makeError("ConfigError", "failed to inspect config lock", [`${error}`]));
+    return err(makeTypedError("ConfigError", "failed to inspect config lock", [`${error}`]));
   }
 }
 
@@ -203,7 +203,7 @@ async function removeLock(paths: ConfigStorePaths): Promise<void> {
  * - PID not parseable (corrupt lock file).
  * - PID references a dead process (normal crash recovery).
  */
-async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, DevboxError>> {
+async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, ConfigError>> {
   const lockBody = `${process.pid}\n`;
 
   // Step 1: Attempt optimistic lock creation with O_CREAT|O_EXCL semantics.
@@ -219,7 +219,7 @@ async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, Devbox
     const nodeError = error as NodeJS.ErrnoException;
     // Any error other than "file already exists" is an unexpected filesystem failure.
     if (nodeError.code !== "EEXIST") {
-      return err(makeError("ConfigError", "failed to create config lock", [`${error}`]));
+        return err(makeTypedError("ConfigError", "failed to create config lock", [`${error}`]));
     }
 
     // Step 2: Lock exists. Determine if the current holder is still alive.
@@ -229,7 +229,7 @@ async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, Devbox
     }
     if (!staleResult.value) {
       // Lock is held by a live process — we must not proceed.
-      return err(makeError("ConfigError", "config lock is held by another active process"));
+      return err(makeTypedError("ConfigError", "config lock is held by another active process"));
     }
 
     // Step 3: Lock is stale. Remove it and retry once.
@@ -239,7 +239,7 @@ async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, Devbox
     } catch (unlinkError: unknown) {
       const unlinkNodeError = unlinkError as NodeJS.ErrnoException;
       if (unlinkNodeError.code !== "ENOENT") {
-        return err(makeError("ConfigError", "failed to remove stale config lock", [`${unlinkError}`]));
+        return err(makeTypedError("ConfigError", "failed to remove stale config lock", [`${unlinkError}`]));
       }
     }
 
@@ -252,12 +252,12 @@ async function acquireLock(paths: ConfigStorePaths): Promise<Result<void, Devbox
       });
       return ok(undefined);
     } catch (retryError: unknown) {
-      return err(makeError("ConfigError", "failed to acquire config lock after stale-lock recovery", [`${retryError}`]));
+      return err(makeTypedError("ConfigError", "failed to acquire config lock after stale-lock recovery", [`${retryError}`]));
     }
   }
 }
 
-async function fsyncPath(filePath: string): Promise<Result<void, DevboxError>> {
+async function fsyncPath(filePath: string): Promise<Result<void, ConfigError>> {
   try {
     const handle = await open(filePath, "r");
     try {
@@ -267,16 +267,16 @@ async function fsyncPath(filePath: string): Promise<Result<void, DevboxError>> {
     }
     return ok(undefined);
   } catch (error: unknown) {
-    return err(makeError("ConfigError", `failed to fsync path: ${filePath}`, [`${error}`]));
+    return err(makeTypedError("ConfigError", `failed to fsync path: ${filePath}`, [`${error}`]));
   }
 }
 
-function parseConfigJson(raw: string): Result<DevboxConfig, DevboxError> {
+function parseConfigJson(raw: string): Result<DevboxConfig, ConfigError> {
   try {
     const parsed = JSON.parse(raw) as unknown;
     return parseConfig(parsed);
   } catch (error: unknown) {
-    return err(makeError("ConfigError", "config file is not valid JSON", [`${error}`]));
+    return err(makeTypedError("ConfigError", "config file is not valid JSON", [`${error}`]));
   }
 }
 
@@ -311,7 +311,7 @@ function parseConfigJson(raw: string): Result<DevboxConfig, DevboxError> {
  * }
  * ```
  */
-export async function loadConfig(paths: ConfigStorePaths = defaultConfigStorePaths()): Promise<Result<DevboxConfig, DevboxError>> {
+export async function loadConfig(paths: ConfigStorePaths = defaultConfigStorePaths()): Promise<Result<DevboxConfig, ConfigError>> {
   try {
     const raw = await readFile(paths.configFile, "utf8");
     return parseConfigJson(raw);
@@ -320,7 +320,7 @@ export async function loadConfig(paths: ConfigStorePaths = defaultConfigStorePat
     if (nodeError.code === "ENOENT") {
       return ok(synthesizeFirstRunConfig());
     }
-    return err(makeError("ConfigError", "failed to read config", [`${error}`]));
+    return err(makeTypedError("ConfigError", "failed to read config", [`${error}`]));
   }
 }
 
@@ -368,7 +368,7 @@ export async function loadConfig(paths: ConfigStorePaths = defaultConfigStorePat
 export async function commitConfig(
   nextConfig: DevboxConfig,
   paths: ConfigStorePaths = defaultConfigStorePaths(),
-): Promise<Result<void, DevboxError>> {
+): Promise<Result<void, ConfigError>> {
   const ensureDirectoryResult = await ensureDirectory(paths);
   if (!ensureDirectoryResult.ok) {
     return ensureDirectoryResult;
@@ -413,7 +413,7 @@ export async function commitConfig(
 
     return ok(undefined);
   } catch (error: unknown) {
-    return err(makeError("ConfigError", "failed to commit config atomically", [`${error}`]));
+    return err(makeTypedError("ConfigError", "failed to commit config atomically", [`${error}`]));
   } finally {
     try {
       await unlink(tempPath);

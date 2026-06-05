@@ -1,4 +1,4 @@
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type RegistryResolutionError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import type { BoxAlias, BoxConfig, DevboxConfig } from "./types.js";
 
@@ -43,13 +43,13 @@ export interface CurrentBox {
  * // err.ok === false, err.error.category === "ValidationError"
  * ```
  */
-export function resolveCurrentBox(config: DevboxConfig): Result<CurrentBox, DevboxError> {
+export function resolveCurrentBox(config: DevboxConfig): Result<CurrentBox, RegistryResolutionError> {
   if (config.current === undefined) {
-    return err(makeError("ValidationError", "no current box selected"));
+    return err(makeTypedError("ValidationError", "no current box selected"));
   }
   const box = config.boxes[config.current];
   if (box === undefined) {
-    return err(makeError("ConfigError", "current alias does not reference a tracked box"));
+    return err(makeTypedError("ConfigError", "current alias does not reference a tracked box"));
   }
   return ok({ alias: config.current, box });
 }

@@ -1,4 +1,4 @@
-import { makeError } from "./errors.js";
+import { makeTypedError, type ValidationError } from "./errors.js";
 import type { Result } from "./result.js";
 import { err, ok } from "./result.js";
 import type { BoxAlias } from "./types.js";
@@ -32,10 +32,10 @@ const INSTANCE_ID_ADVISORY_PATTERN = /^i-(?:[0-9a-f]{8}|[0-9a-f]{17})$/;
  * // invalid.error.category === "ValidationError"
  * ```
  */
-export function parseAlias(raw: string): Result<BoxAlias, ReturnType<typeof makeError>> {
+export function parseAlias(raw: string): Result<BoxAlias, ValidationError> {
   if (!ALIAS_PATTERN.test(raw)) {
     return err(
-      makeError(
+      makeTypedError(
         "ValidationError",
         "alias must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
       ),
@@ -71,9 +71,9 @@ export function parseAlias(raw: string): Result<BoxAlias, ReturnType<typeof make
 export function ensureAliasAvailable(
   alias: BoxAlias,
   tracked: Readonly<Record<BoxAlias, unknown>>,
-): Result<void, ReturnType<typeof makeError>> {
+): Result<void, ValidationError> {
   if (alias in tracked) {
-    return err(makeError("ValidationError", `alias already tracked: ${alias}`));
+    return err(makeTypedError("ValidationError", `alias already tracked: ${alias}`));
   }
   return ok(undefined);
 }

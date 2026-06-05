@@ -1,4 +1,4 @@
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type ConfigError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 import type { RequiredTags } from "./types.js";
 
@@ -50,21 +50,21 @@ export const BUILTIN_REQUIRED_TAG_DEFAULTS: RequiredTags = {
  * // bad.ok === false, bad.error.category === "ConfigError"
  * ```
  */
-export function validateRequiredTags(tags: RequiredTags): Result<void, DevboxError> {
+export function validateRequiredTags(tags: RequiredTags): Result<void, ConfigError> {
   if (!VALID_ENV_VALUES.has(tags.env)) {
-    return err(makeError("ConfigError", "defaults.tags.env must be one of prod, preprod, staging, dev"));
+    return err(makeTypedError("ConfigError", "defaults.tags.env must be one of prod, preprod, staging, dev"));
   }
   if (tags.service !== "devbox") {
-    return err(makeError("ConfigError", "defaults.tags.service must equal devbox"));
+    return err(makeTypedError("ConfigError", "defaults.tags.service must equal devbox"));
   }
   if (tags.version.length < 7 || tags.version.length > 40) {
-    return err(makeError("ConfigError", "defaults.tags.version must be 7 to 40 characters"));
+    return err(makeTypedError("ConfigError", "defaults.tags.version must be 7 to 40 characters"));
   }
   if (!VALID_CUSTOMER_DATA_VALUES.has(tags["customer-data"])) {
-    return err(makeError("ConfigError", "defaults.tags.customer-data must be true or false"));
+    return err(makeTypedError("ConfigError", "defaults.tags.customer-data must be true or false"));
   }
   if (tags.team.trim().length === 0) {
-    return err(makeError("ConfigError", "defaults.tags.team must be a non-empty identifier"));
+    return err(makeTypedError("ConfigError", "defaults.tags.team must be a non-empty identifier"));
   }
   return ok(undefined);
 }

@@ -16,7 +16,7 @@ import { access, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { makeError, type DevboxError } from "./errors.js";
+import { makeTypedError, type ConfigError } from "./errors.js";
 import { err, ok, type Result } from "./result.js";
 
 /**
@@ -61,7 +61,7 @@ import { err, ok, type Result } from "./result.js";
  * }
  * ```
  */
-export async function readPackageVersion(): Promise<Result<string, DevboxError>> {
+export async function readPackageVersion(): Promise<Result<string, ConfigError>> {
   try {
     const packageJsonPathResult = await findNearestPackageJsonPath();
     if (!packageJsonPathResult.ok) {
@@ -71,11 +71,11 @@ export async function readPackageVersion(): Promise<Result<string, DevboxError>>
     const raw = await readFile(packageJsonPathResult.value, "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     if (typeof parsed.version !== "string" || parsed.version.trim().length === 0) {
-      return err(makeError("ConfigError", "package.json version field is missing or invalid"));
+      return err(makeTypedError("ConfigError", "package.json version field is missing or invalid"));
     }
     return ok(parsed.version);
   } catch (error: unknown) {
-    return err(makeError("ConfigError", "failed to read package version", [`${error}`]));
+    return err(makeTypedError("ConfigError", "failed to read package version", [`${error}`]));
   }
 }
 
@@ -101,7 +101,7 @@ export async function readPackageVersion(): Promise<Result<string, DevboxError>>
  * @throws Never throws — filesystem errors during `access` are caught and
  *   treated as "not found at this level."
  */
-async function findNearestPackageJsonPath(): Promise<Result<string, DevboxError>> {
+async function findNearestPackageJsonPath(): Promise<Result<string, ConfigError>> {
   let cursor = dirname(fileURLToPath(import.meta.url));
   // Bounded to avoid runaway traversal on misconfigured installations.
   const maxDepth = 8;
@@ -121,5 +121,5 @@ async function findNearestPackageJsonPath(): Promise<Result<string, DevboxError>
     }
   }
 
-  return err(makeError("ConfigError", "could not locate package.json for version resolution"));
+  return err(makeTypedError("ConfigError", "could not locate package.json for version resolution"));
 }

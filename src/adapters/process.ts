@@ -27,7 +27,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { makeError, type DevboxError } from "../domain/errors.js";
+import { makeTypedError, type ProcessError } from "../domain/errors.js";
 import { err, ok, type Result } from "../domain/result.js";
 
 const execFileAsync = promisify(execFile);
@@ -74,7 +74,7 @@ export interface ProcessSuccess {
 export async function runProcess(
   file: string,
   args: readonly string[],
-): Promise<Result<ProcessSuccess, DevboxError>> {
+): Promise<Result<ProcessSuccess, ProcessError>> {
   try {
     const { stdout, stderr } = await execFileAsync(file, args as string[], {
       encoding: "utf8",
@@ -86,14 +86,14 @@ export async function runProcess(
     // We narrow defensively: each property is checked for existence and type before use,
     // because the rejection value shape is not contractually guaranteed across Node versions.
     if (!(error instanceof Error)) {
-      return err(makeError("TransportError", `command failed: ${file}`, [`${error}`]));
+      return err(makeTypedError("TransportError", `command failed: ${file}`, [`${error}`]));
     }
 
     // ENOENT indicates the executable itself was not found on $PATH or at the given path.
     // This is semantically distinct from a command that ran but exited non-zero.
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      return err(makeError("DependencyError", `required executable not found: ${file}`));
+      return err(makeTypedError("DependencyError", `required executable not found: ${file}`));
     }
 
     // For non-zero exit or signal termination, extract any output the child produced.
@@ -108,6 +108,6 @@ export async function runProcess(
       details.push(...errorWithOutput.stdout.trimEnd().split("\n"));
     }
 
-    return err(makeError("TransportError", `command failed: ${file}`, details));
+    return err(makeTypedError("TransportError", `command failed: ${file}`, details));
   }
 }

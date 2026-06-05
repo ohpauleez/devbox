@@ -1,5 +1,6 @@
 import { loadConfig } from "../../adapters/config-store.js";
 import { describeInstances } from "../../adapters/aws-cli.js";
+import { assertNever } from "../../domain/assert.js";
 import {
   renderListTable,
   renderNoBoxesTracked,
@@ -38,11 +39,16 @@ export async function runListCommand(): Promise<CommandResult> {
   const describeResult = await describeInstances(instanceIds);
   if (describeResult.ok) {
     describedById = describeResult.value;
-  } else if (
-    describeResult.error.category !== "DependencyError" &&
-    describeResult.error.category !== "AwsCliError"
-  ) {
-    return err(describeResult.error);
+  } else {
+    switch (describeResult.error.category) {
+      case "DependencyError":
+      case "AwsCliError":
+        break;
+      case "NotFoundError":
+        return err(describeResult.error);
+      default:
+        return assertNever(describeResult.error);
+    }
   }
 
   for (const [alias, box] of sortedEntries) {

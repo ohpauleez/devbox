@@ -1,4 +1,5 @@
 import type { Result } from "./result.js";
+import { assertNever } from "./assert.js";
 
 /**
  * Stable error categories for CLI contracts.
@@ -18,6 +19,34 @@ export type ErrorCategory =
   | "ConsistencyError"
   | "TransportError";
 
+interface ErrorBase<C extends ErrorCategory> {
+  readonly category: C;
+  readonly message: string;
+  readonly details?: readonly string[];
+}
+
+export type ValidationError = ErrorBase<"ValidationError">;
+export type ConfigError = ErrorBase<"ConfigError">;
+export type DependencyError = ErrorBase<"DependencyError">;
+export type AwsCliError = ErrorBase<"AwsCliError">;
+export type NotFoundError = ErrorBase<"NotFoundError">;
+export type InstanceStateError = ErrorBase<"InstanceStateError">;
+export type TimeoutError = ErrorBase<"TimeoutError">;
+export type ConsistencyError = ErrorBase<"ConsistencyError">;
+export type TransportError = ErrorBase<"TransportError">;
+
+type ErrorByCategory = {
+  readonly ValidationError: ValidationError;
+  readonly ConfigError: ConfigError;
+  readonly DependencyError: DependencyError;
+  readonly AwsCliError: AwsCliError;
+  readonly NotFoundError: NotFoundError;
+  readonly InstanceStateError: InstanceStateError;
+  readonly TimeoutError: TimeoutError;
+  readonly ConsistencyError: ConsistencyError;
+  readonly TransportError: TransportError;
+};
+
 /**
  * Structured error value carried across domain and adapter boundaries.
  *
@@ -27,11 +56,22 @@ export type ErrorCategory =
  * `details`, when present, is a non-empty array of diagnostic strings.
  * Mutability: all fields are readonly.
  */
-export interface DevboxError {
-  readonly category: ErrorCategory;
-  readonly message: string;
-  readonly details?: readonly string[];
-}
+export type DevboxError = ErrorByCategory[keyof ErrorByCategory];
+
+export type ProcessError = DependencyError | TransportError;
+export type AwsReadError = DependencyError | AwsCliError | NotFoundError;
+export type AwsWriteError = DependencyError | AwsCliError | NotFoundError;
+export type RegistryResolutionError = ValidationError | ConfigError;
+export type RemoteTransportError = DependencyError | TransportError;
+export type RemoteAccessPreconditionError =
+  | ConfigError
+  | ValidationError
+  | AwsCliError
+  | NotFoundError
+  | InstanceStateError
+  | TimeoutError
+  | DependencyError
+  | TransportError;
 
 /**
  * Exit code map required by the specification.
@@ -87,6 +127,17 @@ export function makeError(
   return { category, message, details };
 }
 
+export function makeTypedError<C extends ErrorCategory>(
+  category: C,
+  message: string,
+  details?: readonly string[],
+): ErrorByCategory[C] {
+  if (details === undefined) {
+    return { category, message } as ErrorByCategory[C];
+  }
+  return { category, message, details } as ErrorByCategory[C];
+}
+
 /**
  * Render stderr lines in normalized format.
  *
@@ -139,6 +190,17 @@ export function renderErrorLines(error: DevboxError): readonly string[] {
  */
 export function exitCodeForError(error: DevboxError): number {
   return EXIT_CODE_BY_CATEGORY[error.category];
+}
+
+export function mapProcessErrorToDependencyOrTransport(error: ProcessError): DependencyError | TransportError {
+  switch (error.category) {
+    case "DependencyError":
+      return error;
+    case "TransportError":
+      return error;
+    default:
+      return assertNever(error);
+  }
 }
 
 /**

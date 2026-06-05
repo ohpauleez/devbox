@@ -81,8 +81,7 @@ type ExecutableInvocation = Exclude<Invocation, { readonly kind: "invalid" }>;
  *   consumed from `rest`. Otherwise `rest === args` and `sshUserOverride` is
  *   undefined.
  * Invariant: Never mutates the input array.
- *
- * @throws Never throws.
+ * Never throws.
  */
 function parseOptionalSshUser(args: readonly string[]): { readonly sshUserOverride?: string; readonly rest: readonly string[] } {
   if (args.length >= 2 && args[0] === "--ssh-user" && args[1] !== undefined) {
@@ -129,8 +128,7 @@ function writeLines(lines: readonly string[], stream: NodeJS.WriteStream): void 
  * Postcondition: The returned invocation is exhaustively dispatchable; callers
  *   need only handle the `"invalid"` case separately before dispatching.
  * Invariant: Pure function — no side effects, no I/O.
- *
- * @throws Never throws.
+ * Never throws.
  */
 function parseInvocation(argv: readonly string[]): Invocation {
   // No arguments defaults to listing environments — the most common read operation.

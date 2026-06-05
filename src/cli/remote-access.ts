@@ -30,7 +30,7 @@ import { loadConfig } from "../adapters/config-store.js";
 import { ensureSshKeyMaterial, stageTemporarySshKey, type SshContext, type StagedKey } from "../adapters/ssh-cli.js";
 import { resolveCurrentBox, type CurrentBox } from "../domain/context.js";
 import { waitForSsmOnline } from "../domain/ec2-wait.js";
-import { makeError, type DevboxError } from "../domain/errors.js";
+import { makeTypedError, type RemoteAccessPreconditionError } from "../domain/errors.js";
 import { resolveSshUser } from "../domain/ssh-user.js";
 import { err, ok, type Result } from "../domain/result.js";
 import type { DevboxConfig, SshUser } from "../domain/types.js";
@@ -105,7 +105,7 @@ export interface RemoteAccessContext {
  */
 export async function resolveRemoteAccessPreconditions(
   invocationSshUser?: string,
-): Promise<Result<RemoteAccessContext, DevboxError>> {
+): Promise<Result<RemoteAccessContext, RemoteAccessPreconditionError>> {
   // Step 1: Load config — all subsequent steps depend on having valid local state.
   const configResult = await loadConfig();
   if (!configResult.ok) {
@@ -139,7 +139,7 @@ export async function resolveRemoteAccessPreconditions(
     return err(instanceResult.error);
   }
   if (instanceResult.value.state !== "running") {
-    return err(makeError("InstanceStateError", `remote access requires running instance (found ${instanceResult.value.state})`));
+    return err(makeTypedError("InstanceStateError", `remote access requires running instance (found ${instanceResult.value.state})`));
   }
 
   // Step 5: Wait for SSM agent to be online.

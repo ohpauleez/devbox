@@ -121,6 +121,7 @@ Rules:
 - Throw only `Error` objects or subclasses, never strings or arbitrary values.
 - Always instantiate with `new Error(...)` or a subclass.
 - Catch as `unknown` and narrow before use.
+- Error checking must be exhaustive.
 - Normalize third-party throws near the boundary.
 
 Reason: foreseeable production failures are part of ordinary behavior and should be represented as data. This keeps control flow explicit and makes error handling testable.

@@ -1,7 +1,86 @@
+---
+title: RemoteAccess
+---
+
 ## Purpose
 
 Define the remote-access behavior for `devbox connect` and upload-only `devbox cp` over AWS SSM-backed SSH, including invocation-time SSH-user overrides, readiness checks, remote-path safety, temporary key staging, bounded cleanup, and post-success consistency handling.
 The purpose of this capability is to preserve trust across local state, AWS state, and remote-host state by following the archived `devbox-core` design's explicit validation gates, bounded waits, and cross-system failure reporting.
+
+```alloy
+module RemoteAccess
+
+// --- Signatures: Remote access domain vocabulary ---
+
+abstract sig Bool {}
+one sig True, False extends Bool {}
+
+sig Instance {
+  var running : one Bool,
+  var ssmReady : one Bool
+}
+
+sig SshUser {}
+sig Alias {
+  instanceRef : one Instance,
+  boxSshUser : lone SshUser
+}
+
+one sig Defaults {
+  sshUser : lone SshUser
+}
+
+// Remote access session phases
+abstract sig Phase {}
+one sig Idle, Resolving, WaitingSSM, Staging, Transporting, Cleanup, Done, Failed extends Phase {}
+
+one sig Session {
+  var phase : one Phase,
+  var ssmTicksRemaining : one Int,   // 2-min SSM readiness timeout (24 ticks * 5s)
+  var keyStaged : one Bool,
+  var transportStarted : one Bool,
+  var cleanupScheduled : one Bool,
+  var lastConnectUpdated : one Bool
+}
+
+// Outcome vocabulary
+abstract sig Outcome {}
+one sig Success, InstanceStateError, TimeoutError, TransportError, ValidationError, ConsistencyError extends Outcome {}
+
+one sig CommandResult {
+  var outcome : lone Outcome,
+  var exitCode : lone Int
+}
+
+// Current box selection
+var sig current in Alias {}
+
+// Remote path model for cp
+sig RemotePath {
+  hasControlChars : one Bool,
+  isEmpty : one Bool
+}
+
+// Copy transport phases
+abstract sig CpPhase {}
+one sig CpUploading, CpFinalizing, CpDone, CpFailed extends CpPhase {}
+
+one sig CpState {
+  var cpPhase : one CpPhase,
+  var uploadedToTemp : one Bool,
+  var finalizedAtDest : one Bool
+}
+
+// Key storage: agent preference and temp-key lifecycle
+// Issue 22 fix: removed unused SshExitCode sig
+abstract sig KeySource {}
+one sig AgentKey, TempKey extends KeySource {}
+
+one sig KeyStore {
+  var source : one KeySource,
+  var tempFilesExist : one Bool
+}
+```
 
 ## Requirements
 
@@ -24,6 +103,48 @@ IF the user invokes `connect` or `cp` and no current box is selected, THEN THE d
 
 **Postcondition:** No staging, transport, or `lastConnectAt` update occurs.
 
+```alloy
+// --- CLI precondition: current box required ---
+
+pred no_current_box {
+  no current
+}
+
+// Issue 10/11 fix: all events now include CpState and KeyStore frame conditions
+pred remote_rejected_no_current {
+  // Guard: no current box
+  no_current_box
+  // Effect: immediate failure, no phase progression
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = InstanceStateError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: no remote-access setup without current box
+assert no_staging_without_current {
+  always (no_current_box implies Session.keyStaged' = False)
+}
+
+// Safety: no transport without current box
+assert no_transport_without_current {
+  always (no_current_box implies Session.transportStarted' = False)
+}
+```
+
 ### Requirement: Remote Access Preconditions [REMOTE-DOMAIN-PRECOND]
 WHILE `connect` or `cp` is running, THE devbox domain SHALL require the current instance to be `running`, require the instance to become SSM-ready within the readiness timeout, and require all documented local dependencies for the requested command.
 
@@ -42,6 +163,160 @@ WHILE the current instance is `running` and becomes SSM-ready within 2 minutes, 
 IF the current instance is not `running` or does not become SSM-ready within 2 minutes, THEN THE devbox domain SHALL fail with `InstanceStateError` or `TimeoutError` before SSH transport begins.
 
 **Postcondition:** No SSH or SCP session is started.
+
+```alloy
+// --- Precondition checking: running + SSM ready within 2 minutes ---
+
+pred instance_running [a : Alias] {
+  a.instanceRef.running = True
+}
+
+pred instance_not_running [a : Alias] {
+  a.instanceRef.running = False
+}
+
+pred instance_ssm_ready [a : Alias] {
+  a.instanceRef.ssmReady = True
+}
+
+// Begin precondition check: verify instance is running
+pred check_running [a : Alias] {
+  // Guard
+  a in current
+  Session.phase = Idle
+  instance_running[a]
+  // Effect: advance to SSM waiting
+  Session.phase' = WaitingSSM
+  Session.ssmTicksRemaining' = 24   // 24 ticks * 5s = 2 minutes
+  Session.keyStaged' = Session.keyStaged
+  Session.transportStarted' = Session.transportStarted
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Instance not running: immediate rejection
+pred rejected_not_running [a : Alias] {
+  a in current
+  Session.phase = Idle
+  instance_not_running[a]
+  // Effect: fail with InstanceStateError
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = InstanceStateError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// SSM poll tick: check readiness within bounded time
+pred ssm_poll_tick [a : Alias] {
+  a in current
+  Session.phase = WaitingSSM
+  Session.ssmTicksRemaining > 0
+  // SSM may become ready
+  (a.instanceRef.ssmReady' = True or a.instanceRef.ssmReady' = False)
+  // Check if ready now
+  (a.instanceRef.ssmReady' = True) implies {
+    Session.phase' = Staging
+    Session.ssmTicksRemaining' = sub[Session.ssmTicksRemaining, 1]
+  } else {
+    Session.phase' = WaitingSSM
+    Session.ssmTicksRemaining' = sub[Session.ssmTicksRemaining, 1]
+  }
+  // Frame
+  Session.keyStaged' = Session.keyStaged
+  Session.transportStarted' = Session.transportStarted
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  a.instanceRef.running' = a.instanceRef.running
+  all i : Instance - a.instanceRef | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// SSM timeout: 2 minutes elapsed without readiness
+pred ssm_timeout [a : Alias] {
+  a in current
+  Session.phase = WaitingSSM
+  Session.ssmTicksRemaining = 0
+  a.instanceRef.ssmReady = False
+  // Effect: TimeoutError
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = 0
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = TimeoutError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: no SSH transport starts before SSM is ready
+assert no_transport_before_ssm_ready {
+  always (Session.phase = WaitingSSM implies Session.transportStarted = False)
+}
+
+// Safety: non-running instance never reaches staging
+assert non_running_never_stages {
+  always (all a : current |
+    instance_not_running[a] implies Session.phase' != Staging)
+}
+
+// Safety: SSM timeout is bounded (always terminates)
+// Requires fairness: ssm_poll_tick or ssm_timeout eventually fire when enabled
+pred ssm_fairness {
+  always (
+    (Session.phase = WaitingSSM and Session.ssmTicksRemaining > 0)
+      implies eventually (some a : Alias | ssm_poll_tick[a]))
+  always (
+    (Session.phase = WaitingSSM and Session.ssmTicksRemaining = 0)
+      implies eventually (some a : Alias | ssm_timeout[a]))
+}
+
+assert ssm_polling_terminates {
+  ssm_fairness implies
+    always (Session.phase = WaitingSSM implies eventually Session.phase != WaitingSSM)
+}
+```
 
 ### Requirement: SSH User Resolution [REMOTE-DOMAIN-SSHUSER]
 WHEN `connect` or `cp` requires an SSH user, THE devbox domain SHALL resolve it using invocation override, then per-box `sshUser`, then `defaults.sshUser`.
@@ -62,6 +337,30 @@ IF no SSH user can be resolved from invocation override, per-box override, or `d
 
 **Postcondition:** No remote access is attempted with an implicit or guessed SSH user.
 
+```alloy
+// --- SSH user resolution: precedence function ---
+
+fun resolve_ssh_user [invocation : lone SshUser, box : Alias] : lone SshUser {
+  (some invocation) implies invocation
+  else (some box.boxSshUser) implies box.boxSshUser
+  else Defaults.sshUser
+}
+
+pred ssh_user_resolvable [invocation : lone SshUser, box : Alias] {
+  some resolve_ssh_user[invocation, box]
+}
+
+pred ssh_user_unresolvable [invocation : lone SshUser, box : Alias] {
+  no resolve_ssh_user[invocation, box]
+}
+
+// Safety: no key staging without resolved SSH user
+assert no_staging_without_ssh_user {
+  always (all a : current |
+    ssh_user_unresolvable[none, a] implies Session.keyStaged' = False)
+}
+```
+
 ### Requirement: Connect Session Contract [REMOTE-DOMAIN-CONNECT]
 WHEN `connect` succeeds, THE devbox domain SHALL establish an SSM-backed SSH session to the current instance and SHALL update `lastConnectAt` only after session startup succeeds and the subsequent local config commit succeeds.
 
@@ -80,6 +379,74 @@ WHEN `connect` completes session startup successfully and the local config commi
 IF `connect` succeeds in starting the remote session but the subsequent config commit fails, THEN THE devbox domain SHALL fail with `ConsistencyError` and report that `lastConnectAt` may be stale locally.
 
 **Postcondition:** Divergence is reported explicitly after external success.
+
+```alloy
+// --- Connect session: transport + lastConnectAt update ---
+
+pred connect_success [a : Alias] {
+  // Guard: staging complete, transport ready
+  a in current
+  Session.phase = Transporting
+  Session.keyStaged = True
+  // Effect: session established, lastConnectAt updated
+  Session.phase' = Done
+  Session.transportStarted' = True
+  Session.lastConnectUpdated' = True
+  Session.cleanupScheduled' = True
+  Session.keyStaged' = Session.keyStaged
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = Success
+  CommandResult.exitCode' = 0
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+pred connect_consistency_error [a : Alias] {
+  // Guard: transport succeeded but local commit failed
+  a in current
+  Session.phase = Transporting
+  Session.keyStaged = True
+  // Effect: session started externally, but lastConnectAt NOT updated
+  Session.phase' = Failed
+  Session.transportStarted' = True
+  Session.lastConnectUpdated' = False
+  Session.cleanupScheduled' = True
+  Session.keyStaged' = Session.keyStaged
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = ConsistencyError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: lastConnectAt only updated after BOTH external and local success
+assert last_connect_requires_both_successes {
+  always (Session.lastConnectUpdated' = True implies (
+    Session.transportStarted' = True and
+    CommandResult.outcome' = Success))
+}
+
+// Safety: consistency error surfaces divergence
+assert consistency_error_on_local_failure {
+  always (
+    (Session.transportStarted' = True and Session.lastConnectUpdated' = False)
+      implies CommandResult.outcome' = ConsistencyError)
+}
+```
 
 ### Requirement: Copy Transport Contract [REMOTE-DOMAIN-CP]
 WHEN `cp <local> <remote>` succeeds, THE devbox domain SHALL upload exactly one regular local file to a temporary path in the destination directory and finalize the destination with an atomic remote move.
@@ -100,6 +467,98 @@ IF `cp` completes remote transfer and finalization successfully but the subseque
 
 **Postcondition:** The command reports cross-system divergence explicitly.
 
+```alloy
+// --- Copy transport: temp-upload + atomic move ---
+
+// Upload phase: transfer file to temporary location on remote
+pred cp_upload_done [a : Alias] {
+  a in current
+  Session.phase = Transporting
+  Session.keyStaged = True
+  CpState.cpPhase = CpUploading
+  CpState.uploadedToTemp = False
+  // Effect: upload complete, move to finalizing phase
+  CpState.cpPhase' = CpFinalizing
+  CpState.uploadedToTemp' = True
+  CpState.finalizedAtDest' = False
+  Session.phase' = Transporting
+  Session.transportStarted' = True
+  Session.keyStaged' = Session.keyStaged
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+pred cp_success [a : Alias] {
+  a in current
+  Session.phase = Transporting
+  Session.keyStaged = True
+  CpState.cpPhase = CpFinalizing
+  CpState.uploadedToTemp = True
+  // Effect: finalized at destination, lastConnectAt updated
+  CpState.cpPhase' = CpDone
+  CpState.uploadedToTemp' = True
+  CpState.finalizedAtDest' = True
+  Session.phase' = Done
+  Session.lastConnectUpdated' = True
+  Session.transportStarted' = True
+  Session.cleanupScheduled' = True
+  Session.keyStaged' = Session.keyStaged
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = Success
+  CommandResult.exitCode' = 0
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+pred cp_consistency_error [a : Alias] {
+  a in current
+  Session.phase = Transporting
+  Session.keyStaged = True
+  CpState.cpPhase = CpFinalizing
+  CpState.uploadedToTemp = True
+  CpState.finalizedAtDest' = True
+  // Remote succeeded but local commit failed
+  CpState.cpPhase' = CpFailed
+  CpState.uploadedToTemp' = True
+  Session.phase' = Failed
+  Session.lastConnectUpdated' = False
+  Session.transportStarted' = True
+  Session.cleanupScheduled' = True
+  Session.keyStaged' = Session.keyStaged
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = ConsistencyError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: final destination only written via atomic move (never partial)
+assert cp_no_partial_destination {
+  always (CpState.finalizedAtDest' = True implies CpState.uploadedToTemp = True)
+}
+
+// Safety: cp consistency error explicitly surfaces divergence
+assert cp_consistency_surfaces_divergence {
+  always (
+    (CpState.finalizedAtDest' = True and Session.lastConnectUpdated' = False)
+      implies CommandResult.outcome' = ConsistencyError)
+}
+```
+
 ### Requirement: Remote Path Validation [REMOTE-DOMAIN-PATH]
 WHEN `cp` receives a remote path, THE devbox domain SHALL require the remote path to be non-empty after trimming and SHALL reject ASCII control characters and null bytes before any transport begins.
 
@@ -118,6 +577,55 @@ WHEN the remote path is non-empty after trimming and contains no ASCII control c
 IF the remote path contains an ASCII control character or null byte, THEN THE devbox domain SHALL fail with `ValidationError` before any SSH, SCP, or AWS transport command is executed.
 
 **Postcondition:** The unsafe path never reaches a remote shell.
+
+```alloy
+// --- Remote path validation: safety gate ---
+
+pred path_safe [p : RemotePath] {
+  p.hasControlChars = False
+  p.isEmpty = False
+}
+
+pred path_unsafe [p : RemotePath] {
+  p.hasControlChars = True or p.isEmpty = True
+}
+
+// Issue 21 fix: path_rejected now has a phase guard — only fires at Idle (command start)
+pred path_rejected [p : RemotePath] {
+  path_unsafe[p]
+  Session.phase = Idle   // path validation occurs at command start, before any setup
+  // Effect: fail before any transport
+  Session.phase' = Failed
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = ValidationError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Issue 15 fix: scoped to path_rejected event (not all path atoms globally)
+assert unsafe_path_never_transported {
+  always (all p : RemotePath |
+    path_rejected[p] implies Session.transportStarted' = False)
+}
+
+// Safety: unsafe paths never reach a remote shell
+assert unsafe_path_never_reaches_remote {
+  always (all p : RemotePath |
+    path_rejected[p] implies Session.phase' != Transporting)
+}
+```
 
 ### Requirement: Temporary Key Staging [REMOTE-ADAPTER-STAGE]
 WHEN `connect` or `cp` begins remote-access setup, THE devbox adapter SHALL follow the documented `ssh-over-ssm` style workflow by staging a temporary SSH public key through AWS SSM before starting the SSH transport session.
@@ -138,6 +646,68 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 
 **Postcondition:** No partially initialized remote transport session is attempted.
 
+```alloy
+// --- Key staging: staging must complete before transport ---
+// Issue 25 fix: KeyStore events are integrated into staging_success
+// (agent key vs temp key is determined nondeterministically at staging time)
+
+pred staging_success [a : Alias] {
+  a in current
+  Session.phase = Staging
+  // Effect: key staged, advance to transport
+  Session.phase' = Transporting
+  Session.keyStaged' = True
+  Session.transportStarted' = False  // not yet started, just ready
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore: nondeterministic choice models agent availability
+  (KeyStore.source' = AgentKey and KeyStore.tempFilesExist' = False) or
+  (KeyStore.source' = TempKey and KeyStore.tempFilesExist' = True)
+}
+
+pred staging_failure [a : Alias] {
+  a in current
+  Session.phase = Staging
+  // Effect: TransportError, no transport started
+  Session.phase' = Failed
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  CommandResult.outcome' = TransportError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame (staging failed, no key established)
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: transport never starts without staged key
+assert transport_requires_staged_key {
+  always (Session.phase = Transporting implies Session.keyStaged = True)
+}
+
+// Safety: staging failure blocks all transport
+assert staging_failure_blocks_transport {
+  always (Session.keyStaged = False implies Session.transportStarted = False)
+}
+```
+
 ### Requirement: Temporary Key Cleanup [REMOTE-ADAPTER-CLEANUP]
 WHEN temporary SSH key staging is used, THE devbox adapter SHALL bound the lifetime of the remote authorized-key entry to 5 minutes and SHALL attempt best-effort cleanup on local failure paths.
 
@@ -156,6 +726,36 @@ WHEN remote access is staged successfully, THE devbox adapter SHALL remove or sc
 IF best-effort cleanup cannot be completed during a local failure path, THEN THE devbox adapter SHALL still fail the command with transport failure details while preserving the bounded cleanup intent.
 
 **Postcondition:** The caller receives explicit transport failure information instead of silent cleanup loss.
+
+```alloy
+// --- Temporary key cleanup: bounded lifetime ---
+
+pred cleanup_performed {
+  Session.phase in (Done + Failed)
+  Session.keyStaged = True
+  // Cleanup scheduled on any path that staged a key
+  Session.cleanupScheduled = True
+}
+
+// Safety: cleanup is always scheduled when staging succeeded
+assert cleanup_always_scheduled_after_staging {
+  always (
+    (Session.keyStaged = True and Session.phase' in (Done + Failed))
+      implies Session.cleanupScheduled' = True)
+}
+
+// Issue 13 fix: liveness with explicit fairness premise
+pred session_progress_fairness {
+  always (
+    Session.phase in (Idle + WaitingSSM + Staging + Transporting)
+      implies eventually Session.phase in (Done + Failed))
+}
+
+assert staged_keys_eventually_cleaned {
+  session_progress_fairness implies
+    always (Session.keyStaged = True implies eventually Session.cleanupScheduled = True)
+}
+```
 
 ### Requirement: Temporary Key Storage [REMOTE-ADAPTER-KEYSTORE]
 WHEN `connect` or `cp` requires a temporary SSH keypair, THE devbox adapter SHALL store the private key at `~/.ssh/ssm-ssh-tmp` and the public key at `~/.ssh/ssm-ssh-tmp.pub`, generated with `ssh-keygen -t rsa -N '' -f ~/.ssh/ssm-ssh-tmp -C ssh-over-ssm`.
@@ -181,6 +781,58 @@ WHEN a temporary SSH public key is staged on the remote instance, THE devbox ada
 
 **Postcondition:** The remote authorized-key entry is removed within 15 seconds regardless of local process behavior.
 
+```alloy
+// --- Key storage: agent preference and temp-key lifecycle ---
+// Issue 25 fix: remove_temp_files is now a proper event in the transitions fact
+
+pred remove_temp_files_event {
+  // Guard: session complete, temp files exist
+  Session.phase in (Done + Failed)
+  KeyStore.source = TempKey
+  KeyStore.tempFilesExist = True
+  // Effect: remove temp files
+  KeyStore.tempFilesExist' = False
+  KeyStore.source' = KeyStore.source
+  // Frame: session state unchanged
+  Session.phase' = Session.phase
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = Session.keyStaged
+  Session.transportStarted' = Session.transportStarted
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+}
+
+// Safety: agent key never creates temp files
+assert agent_key_no_temp_files {
+  always (KeyStore.source = AgentKey implies KeyStore.tempFilesExist = False)
+}
+
+// Issue 13 fix: temp file removal needs fairness (non-stutter when cleanup enabled)
+// Fairness covers entire path: transport completes AND cleanup fires
+pred temp_cleanup_fairness {
+  // Transport must eventually complete when in progress
+  always (
+    (Session.phase = Transporting and Session.keyStaged = True)
+      implies eventually (Session.phase in (Done + Failed)))
+  // Cleanup fires when session is complete and temp files exist
+  always (
+    (KeyStore.tempFilesExist = True and Session.phase in (Done + Failed))
+      implies eventually remove_temp_files_event)
+}
+
+assert temp_files_eventually_removed {
+  temp_cleanup_fairness implies
+    always (KeyStore.tempFilesExist = True implies eventually KeyStore.tempFilesExist = False)
+}
+```
+
 ### Requirement: Connect Session Lifecycle [REMOTE-DOMAIN-SESSION]
 WHEN `connect` hands off the SSH session, THE devbox process SHALL either exec into or wait on the SSH child process and SHALL exit with the SSH process exit code.
 
@@ -194,6 +846,23 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 
 **Postcondition:** The caller observes the SSH session's actual exit status.
 
+```alloy
+// --- Session lifecycle: exit code propagation ---
+// Issue 22 fix: removed unused SshExitCode sig
+
+pred session_terminates [sshExit : Int] {
+  Session.phase = Done or Session.phase = Failed
+  // Exit code is propagated from SSH child
+  CommandResult.exitCode' = sshExit
+}
+
+// Issue 12 fix: verifies exit code is set (not the tautology x' = x')
+assert exit_code_propagated {
+  always (
+    Session.phase' = Done implies some CommandResult.exitCode')
+}
+```
+
 ### Requirement: Copy File Size [REMOTE-DOMAIN-FILESIZE]
 WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce an artificial file size limit.
 
@@ -206,3 +875,107 @@ WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce a
 WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
 
 **Postcondition:** SCP and network bandwidth are the natural transfer constraints.
+
+```alloy
+// --- File size: no artificial limit ---
+// This is a structural non-constraint: the model deliberately does NOT
+// include a file size guard. The absence of a size predicate in the
+// cp_success guard formalizes this requirement.
+
+// Issue 14 fix: allows stutter (Transporting stays Transporting) which is valid.
+// The assertion verifies that no OTHER phase is reachable from Transporting —
+// only Done, Failed, or staying in Transporting. No artificial size-based rejection.
+assert no_artificial_size_limit {
+  always (
+    (some current and Session.phase = Transporting and Session.keyStaged = True)
+      implies Session.phase' in (Done + Failed + Transporting))
+}
+```
+
+```alloy
+// --- Transition system ---
+
+pred stutter {
+  Session.phase' = Session.phase
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = Session.keyStaged
+  Session.transportStarted' = Session.transportStarted
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+}
+
+pred init {
+  Session.phase = Idle
+  Session.ssmTicksRemaining = 24
+  Session.keyStaged = False
+  Session.transportStarted = False
+  Session.cleanupScheduled = False
+  Session.lastConnectUpdated = False
+  no CommandResult.outcome
+  no CommandResult.exitCode
+  KeyStore.source = AgentKey
+  KeyStore.tempFilesExist = False
+  CpState.cpPhase = CpUploading
+  CpState.uploadedToTemp = False
+  CpState.finalizedAtDest = False
+  all i : Instance | i.running = True and i.ssmReady = False
+}
+
+// Issue 25 fix: KeyStore event (remove_temp_files_event) is now in transitions
+fact transitions {
+  init and always (
+    // Precondition checks
+    (some a : Alias | check_running[a] or rejected_not_running[a])
+    or (some a : Alias | ssm_poll_tick[a] or ssm_timeout[a])
+    // Key staging
+    or (some a : Alias | staging_success[a] or staging_failure[a])
+    // Transport
+    or (some a : Alias | cp_upload_done[a])
+    or (some a : Alias | connect_success[a] or connect_consistency_error[a])
+    or (some a : Alias | cp_success[a] or cp_consistency_error[a])
+    // Path rejection (issue 21: only fires from Idle)
+    or (some p : RemotePath | path_rejected[p])
+    // No current box
+    or remote_rejected_no_current
+    // Key cleanup (issue 25: connected to transitions)
+    or remove_temp_files_event
+    // Stutter
+    or stutter
+  )
+}
+
+// --- Commands ---
+
+run show_remote_access {} for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 5 steps
+
+run scenario_connect_success {
+  eventually (Session.phase = Done and CommandResult.outcome = Success)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 8 steps
+
+run scenario_cp_success {
+  eventually (CpState.cpPhase = CpDone and CpState.finalizedAtDest = True)
+} for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 12 steps
+
+check no_transport_before_ssm_ready for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check transport_requires_staged_key for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check last_connect_requires_both_successes for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check unsafe_path_never_transported for 2 Alias, 2 Instance, 2 SshUser, 2 RemotePath, 8 Int, 10 steps expect 0
+check no_staging_without_current for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
+check cleanup_always_scheduled_after_staging for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check cp_no_partial_destination for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
+check no_artificial_size_limit for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
+check exit_code_propagated for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps expect 0
+check agent_key_no_temp_files for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps expect 0
+check staged_keys_eventually_cleaned for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 20 steps
+check temp_files_eventually_removed for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 15 steps
+check ssm_polling_terminates for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 7 Int, 15 steps
+```

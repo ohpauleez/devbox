@@ -421,7 +421,7 @@ Subsequent lines may contain indented raw stderr from AWS CLI, SSH, or SCP subpr
 
 ### Config File Permissions
 
-Config files are created with mode `0644`. The config contains no secrets — only aliases, instance IDs, timestamps, and tag metadata. The advisory lock file uses the same permissions.
+Config files are created with mode `0600`. The config contains no secrets — only aliases, instance IDs, timestamps, and tag metadata. The advisory lock file uses the same permissions.
 
 ### Signal Handling
 

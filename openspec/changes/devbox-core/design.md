@@ -594,8 +594,8 @@ Contract notes:
 
 ### Config File Permissions and Encoding
 
-- Config files are created with mode `0644`. The config contains no secrets.
-- The advisory lock file is created at `~/.config/devbox.json.lock` with mode `0644`.
+- Config files are created with mode `0600`. The config contains no secrets.
+- The advisory lock file is created at `~/.config/devbox.json.lock` with mode `0600`.
 - Lock file content is the PID of the holding process as a decimal ASCII string.
 - All config I/O assumes UTF-8 without BOM. A leading BOM is treated as invalid JSON.
 

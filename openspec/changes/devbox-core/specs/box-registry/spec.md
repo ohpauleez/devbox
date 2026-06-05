@@ -227,13 +227,13 @@ WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes 
 **Postcondition:** No table header or empty table is rendered.
 
 ### Requirement: Config Permissions [BOX-ADAPTER-PERMS]
-WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0644`.
+WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0600` (read-write for the user only).
 
 **References:**
 - `proposal.md#Quality Attributes`
 
 #### Scenario: Config Created With Standard Permissions [BOX-PERMS-CONFIG]
-WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0644`.
+WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0600` (read-write for the user only).
 
 **Postcondition:** The config file is readable by the owner and group/others.
 

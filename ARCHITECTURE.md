@@ -366,6 +366,8 @@ The OpenSpec change and `docs/lfm.md` provide the rationale; the `test/` tree sh
 
 ## Relationship To OpenSpec
 
+This project uses spec-driven development with OpenSpec (using the [srs-driven schema](github.com/ohpauleez/openspec_srs-driven)) to make changes.
+
 For product intent, start in `openspec/`:
 
 - `proposal.md`: problem statement, command set, invariants, and failure categories
@@ -374,3 +376,26 @@ For product intent, start in `openspec/`:
 - `specs/*`: capability-specific requirements for registry, lifecycle, remote access, and distribution
 
 Use this `ARCHITECTURE.md` when you need to know where a change belongs in the code. Use the OpenSpec change when you need to know what behavior the code is supposed to preserve.
+
+### spec.md
+
+All spec.md files define the system's verifiable behavior using EARS format and RFC 2119 keywords:
+
+| Pattern           | Template                                                              | When to use                    |
+|-------------------|-----------------------------------------------------------------------|--------------------------------|
+| Ubiquitous        | THE <system> SHALL <response>.                                        | Always active                  |
+| State-driven      | WHILE <precondition>, THE <system> SHALL <response>.                  | Active in a continuous state   |
+| Event-driven      | WHEN <trigger>, THE <system> SHALL <response>.                        | Discrete event causes behavior |
+| Unwanted-behavior | IF <trigger>, THEN THE <system> SHALL <response>.                     | Error/failure mitigation       |
+| Complex           | WHILE <precondition>, WHEN <trigger>, THE <system> SHALL <response>.  | Both state and event required  |
+| Optional          | WHERE <feature is included>, THE <system> SHALL <response>.           | Optional/configurable behavior |
+
+RFC 2119: SHALL/MUST = absolute requirement, SHOULD = recommended, MAY = optional.
+
+Escape hatch: When a requirement has more than 3 preconditions or is mathematical/tabular,
+it MAY use decision tables, lists, or other formats. The requirement MUST include a
+justification for why EARS is insufficient.
+
+Specs are all traceable through the code and tests using [spec-traceability](docs/spec-traceability.md).
+Test tooling ensures that all specs are covered by tests.
+

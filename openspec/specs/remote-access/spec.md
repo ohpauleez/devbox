@@ -1,11 +1,18 @@
-## ADDED Requirements
+## Purpose
+
+Define the remote-access behavior for `devbox connect` and upload-only `devbox cp` over AWS SSM-backed SSH, including invocation-time SSH-user overrides, readiness checks, remote-path safety, temporary key staging, bounded cleanup, and post-success consistency handling.
+The purpose of this capability is to preserve trust across local state, AWS state, and remote-host state by following the archived `devbox-core` design's explicit validation gates, bounded waits, and cross-system failure reporting.
+
+## Requirements
 
 ### Requirement: CLI Remote Access Commands [REMOTE-CLI-CMDS]
 THE devbox CLI SHALL provide `connect` and `cp <local> <remote>` commands, each supporting an invocation-time `--ssh-user <user>` override.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Capabilities`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Capabilities`
 
 #### Scenario: Runtime SSH User Override [REMOTE-CLI-SSHUSER]
 WHEN the user invokes `connect` or `cp` with `--ssh-user <user>`, THE devbox CLI SHALL pass that override into SSH-user resolution for the command.
@@ -21,8 +28,10 @@ IF the user invokes `connect` or `cp` and no current box is selected, THEN THE d
 WHILE `connect` or `cp` is running, THE devbox domain SHALL require the current instance to be `running`, require the instance to become SSM-ready within the readiness timeout, and require all documented local dependencies for the requested command.
 
 **References:**
-- `proposal.md#Assumptions and Dependencies`
-- `proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Assumptions and Dependencies`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
 
 #### Scenario: Running And Ready Continues [REMOTE-PRECOND-READY]
 WHILE the current instance is `running` and becomes SSM-ready within 2 minutes, THE devbox domain SHALL allow remote-access transport setup to proceed.
@@ -38,8 +47,10 @@ IF the current instance is not `running` or does not become SSM-ready within 2 m
 WHEN `connect` or `cp` requires an SSH user, THE devbox domain SHALL resolve it using invocation override, then per-box `sshUser`, then `defaults.sshUser`.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Defaults SSH User Used [REMOTE-SSHUSER-DEFAULT]
 WHEN no invocation override or per-box override is present and `defaults.sshUser` is configured, THE devbox domain SHALL use `defaults.sshUser` for remote access.
@@ -55,8 +66,10 @@ IF no SSH user can be resolved from invocation override, per-box override, or `d
 WHEN `connect` succeeds, THE devbox domain SHALL establish an SSM-backed SSH session to the current instance and SHALL update `lastConnectAt` only after session startup succeeds and the subsequent local config commit succeeds.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
 
 #### Scenario: Connect Success Updates Timestamp [REMOTE-CONNECT-SUCCESS]
 WHEN `connect` completes session startup successfully and the local config commit succeeds, THE devbox domain SHALL update `lastConnectAt` for the current tracked box.
@@ -72,8 +85,10 @@ IF `connect` succeeds in starting the remote session but the subsequent config c
 WHEN `cp <local> <remote>` succeeds, THE devbox domain SHALL upload exactly one regular local file to a temporary path in the destination directory and finalize the destination with an atomic remote move.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
 
 #### Scenario: Copy Success Finalizes Destination [REMOTE-CP-SUCCESS]
 WHEN `cp` validates the local file and remote path, completes upload to a temporary remote path, and completes finalization successfully, THE devbox domain SHALL report success and update `lastConnectAt` only after the local config commit succeeds.
@@ -89,8 +104,10 @@ IF `cp` completes remote transfer and finalization successfully but the subseque
 WHEN `cp` receives a remote path, THE devbox domain SHALL require the remote path to be non-empty after trimming and SHALL reject ASCII control characters and null bytes before any transport begins.
 
 **References:**
-- `proposal.md#Failure Modes`
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Safe Remote Path Accepted [REMOTE-PATH-ACCEPT]
 WHEN the remote path is non-empty after trimming and contains no ASCII control characters or null bytes, THE devbox domain SHALL allow transport preparation to continue.
@@ -106,8 +123,10 @@ IF the remote path contains an ASCII control character or null byte, THEN THE de
 WHEN `connect` or `cp` begins remote-access setup, THE devbox adapter SHALL follow the documented `ssh-over-ssm` style workflow by staging a temporary SSH public key through AWS SSM before starting the SSH transport session.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Staging Completes Before Transport [REMOTE-STAGE-SUCCESS]
 WHEN temporary SSH key staging succeeds, THE devbox adapter SHALL wait for staging completion before starting SSH or SCP transport.
@@ -123,8 +142,10 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 WHEN temporary SSH key staging is used, THE devbox adapter SHALL bound the lifetime of the remote authorized-key entry to 5 minutes and SHALL attempt best-effort cleanup on local failure paths.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Cleanup Scheduled Or Performed [REMOTE-CLEANUP-SUCCESS]
 WHEN remote access is staged successfully, THE devbox adapter SHALL remove or schedule removal of the temporary key material within the 5-minute bound.
@@ -140,8 +161,10 @@ IF best-effort cleanup cannot be completed during a local failure path, THEN THE
 WHEN `connect` or `cp` requires a temporary SSH keypair, THE devbox adapter SHALL store the private key at `~/.ssh/ssm-ssh-tmp` and the public key at `~/.ssh/ssm-ssh-tmp.pub`, generated with `ssh-keygen -t rsa -N '' -f ~/.ssh/ssm-ssh-tmp -C ssh-over-ssm`.
 
 **References:**
-- `proposal.md#Quality Attributes`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Agent Key Available [REMOTE-KEY-AGENT]
 WHEN `ssh-add -l` reports available keys, THE devbox adapter SHALL use the first key from the local SSH agent instead of generating a temporary keypair.
@@ -162,7 +185,9 @@ WHEN a temporary SSH public key is staged on the remote instance, THE devbox ada
 WHEN `connect` hands off the SSH session, THE devbox process SHALL either exec into or wait on the SSH child process and SHALL exit with the SSH process exit code.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Connect Propagates SSH Exit Code [REMOTE-SESSION-EXIT]
 WHEN the SSH session terminates, THE devbox connect process SHALL exit with the same exit code as the SSH child process.
@@ -173,15 +198,11 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce an artificial file size limit.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Large File Accepted [REMOTE-CP-LARGESIZE]
 WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
 
 **Postcondition:** SCP and network bandwidth are the natural transfer constraints.
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
-
-## RENAMED Requirements

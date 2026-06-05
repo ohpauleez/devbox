@@ -1,11 +1,18 @@
-## ADDED Requirements
+## Purpose
+
+Define the supported distribution contracts for `devbox` so the CLI can be installed through `npm` and shipped as a bundled `dist/devbox.js` artifact while preserving the same user-visible behavior, help/version surface, outputs, exit codes, and Node.js runtime expectations.
+This spec carries forward the intent that packaging is part of the product contract rather than a secondary build concern.
+
+## Requirements
 
 ### Requirement: Primary NPM Distribution [DIST-CLI-NPM]
 THE devbox system SHALL support installation and update through `npm` as the primary distribution path.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Capabilities`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Capabilities`
 
 #### Scenario: NPM Installed CLI Available [DIST-NPM-SUCCESS]
 WHEN the package is installed through `npm`, THE devbox system SHALL expose the `devbox` CLI using standard Node.js package installation behavior.
@@ -21,8 +28,10 @@ IF package metadata or build outputs do not support standard `npm` installation 
 THE devbox system SHALL support an additional bundled distribution artifact at `dist/devbox.js` that runs under Node.js 20+ without requiring the TypeScript source tree at runtime.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Bundle Output Has Shebang [DIST-BUNDLE-SHEBANG]
 WHEN the bundled artifact is built successfully, THE devbox system SHALL emit exactly one JavaScript file at `dist/devbox.js` whose first line is `#!/usr/bin/env node`.
@@ -38,8 +47,10 @@ IF the bundled artifact depends on the TypeScript source tree or omits the requi
 THE devbox system SHALL preserve the same command behavior, exit codes, stdout contracts, and stderr contracts across the `npm`-installed CLI and the bundled `dist/devbox.js` artifact.
 
 **References:**
-- `proposal.md#Quality Attributes`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Help And Local Commands Match [DIST-PARITY-SMOKE]
 WHEN equivalent local-only commands are executed through the `npm`-installed CLI and the bundled artifact, THE devbox system SHALL produce the same user-visible behavior.
@@ -55,8 +66,10 @@ IF a supported distribution form produces different exit codes or output contrac
 THE devbox system SHALL preserve the same top-level `-v` and `--version` behavior and the same top-level `-h` and `--help` behavior across the `npm`-installed CLI and the bundled `dist/devbox.js` artifact.
 
 **References:**
-- `proposal.md#Context`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Context`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Version Output Matches [DIST-VERSION-PARITY]
 WHEN the user invokes top-level version flags through supported distribution forms, THE devbox system SHALL produce equivalent version output and successful exit behavior.
@@ -67,9 +80,3 @@ WHEN the user invokes top-level version flags through supported distribution for
 WHEN the user invokes top-level help flags through supported distribution forms, THE devbox system SHALL produce equivalent help output, version output inclusion, and successful exit behavior.
 
 **Postcondition:** Help reporting remains interchangeable across supported distribution forms.
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
-
-## RENAMED Requirements

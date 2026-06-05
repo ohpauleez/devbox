@@ -1,11 +1,18 @@
-## ADDED Requirements
+## Purpose
+
+Define the local box-registry behavior for `devbox`: tracking named EC2 development machines, selecting the current box, listing tracked boxes, and handling `init`, `add`, `rm`, and `switch` with local config as the durable source of truth.
+This spec also captures the registry-side invariants and safety rules, including alias integrity, first-run config synthesis, atomic single-writer config updates, explicit destructive behavior, and the separation between local tracking state and live AWS state.
+
+## Requirements
 
 ### Requirement: CLI Registry Commands [BOX-CLI-REGISTRY]
 THE devbox CLI SHALL provide local box-registry commands for `list`, `init <alias> <template-file>`, `add <instance-id> <alias>`, `rm <alias> [--terminate]`, and `switch <alias>`.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Capabilities`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Capabilities`
 
 #### Scenario: List Without Config [BOX-LIST-NOCONFIG]
 WHEN the user invokes `devbox` or `devbox list` and the config file is absent, THE devbox CLI SHALL succeed and report an empty tracked-box state.
@@ -21,8 +28,10 @@ IF a registry command that requires an existing alias is invoked for an alias no
 THE devbox CLI SHALL support top-level `-v` and `--version` flags that print version information, top-level `-h` and `--help` flags that print command overview and help information together with version information, and no-argument invocation that defaults to `devbox list`.
 
 **References:**
-- `proposal.md#Context`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Context`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Version Flag Prints Version [BOX-VERSION-FLAG]
 WHEN the user invokes `devbox -v` or `devbox --version`, THE devbox CLI SHALL print version information and exit successfully without running `list` or any other command.
@@ -43,8 +52,10 @@ WHEN the user invokes `devbox` with no arguments, THE devbox CLI SHALL behave as
 THE devbox domain SHALL treat the local config as the source of truth for tracked aliases and current-box selection.
 
 **References:**
-- `proposal.md#Domain Model`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Domain Model`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Current Alias Preserved [BOX-CURRENT-VALID]
 WHILE a config contains a `current` value, THE devbox domain SHALL require that `current` name an existing tracked box.
@@ -60,8 +71,10 @@ IF the config contains a `current` alias that does not exist in the tracked box 
 WHEN the user supplies an alias to a mutating registry command, THE devbox domain SHALL require the alias to match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` and be unique within the tracked box registry.
 
 **References:**
-- `proposal.md#Domain Model`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Domain Model`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Valid Alias Accepted [BOX-ALIAS-ACCEPT]
 WHEN the user supplies a unique alias that matches the alias rule, THE devbox domain SHALL allow the command to proceed to its next validation stage.
@@ -77,8 +90,10 @@ IF the user supplies an alias that violates the alias rule or is already tracked
 THE devbox domain SHALL model config state with required `boxes`, optional `current`, required `defaults.tags`, optional `defaults.ImageId`, optional `defaults.IamInstanceProfile`, optional `defaults.sshUser`, optional per-box `sshUser`, and optional per-box `lastConnectAt`.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Domain Model`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Domain Model`
 
 #### Scenario: First Run Synthesis [BOX-CONFIG-FIRSTRUN]
 WHEN a mutating command runs without an existing config file, THE devbox domain SHALL synthesize first-run state with an empty `boxes` object, no `current`, and required defaults without inventing environment-specific launch values.
@@ -94,8 +109,10 @@ IF the existing config does not satisfy the config model, THEN THE devbox domain
 WHEN remote-access commands require an SSH user, THE devbox domain SHALL resolve the SSH user in this precedence order: invocation override, per-box `sshUser`, then `defaults.sshUser`.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Per Box Override Used [BOX-SSHUSER-BOX]
 WHILE a tracked box contains a per-box `sshUser` and the command does not specify an invocation override, THE devbox domain SHALL use the per-box `sshUser` instead of `defaults.sshUser`.
@@ -111,8 +128,10 @@ IF a remote-access command requires an SSH user and none can be resolved from in
 WHEN `add <instance-id> <alias>` is invoked, THE devbox domain SHALL treat AWS instance description in the active account and region as authoritative and SHALL warn, not reject, when the supplied instance ID looks malformed against the advisory regex.
 
 **References:**
-- `proposal.md#Context`
-- `proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Context`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
 
 #### Scenario: Malformed Looking Instance ID Warned [BOX-INSTANCEID-WARN]
 WHEN the supplied instance ID does not match the advisory EC2 instance-ID regex but AWS still accepts it as describable in the active account and region, THE devbox domain SHALL continue the command and emit a warning rather than a validation failure.
@@ -128,8 +147,10 @@ IF the supplied instance ID cannot be described in the active account and region
 WHEN `init <alias> <template-file>` succeeds, THE devbox domain SHALL create exactly one tracked box for the returned instance ID, set `current` to the alias, and preserve the documented merge and validation rules for launch input.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Init Success Commits Tracking [BOX-INIT-SUCCESS]
 WHEN `init` receives a valid alias, a valid template file, required launch values after merge, and an AWS launch success response containing exactly one instance ID, THE devbox domain SHALL commit `boxes[alias].instanceId` and set `current` to the alias.
@@ -145,8 +166,10 @@ IF `init` successfully launches the AWS instance but the subsequent local config
 WHEN `add <instance-id> <alias>` succeeds, THE devbox domain SHALL add the alias to local tracking and set `current` to that alias.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Capabilities`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Capabilities`
 
 #### Scenario: Add Success Sets Current [BOX-ADD-SUCCESS]
 WHEN `add` validates the alias and confirms that the instance is describable in the active account and region, THE devbox domain SHALL commit the alias mapping and set `current` to the alias.
@@ -162,8 +185,10 @@ IF `add` cannot validate the alias or cannot confirm the instance in the active 
 WHEN `rm <alias> [--terminate]` is invoked, THE devbox domain SHALL remove the alias locally, clear `current` if it pointed to that alias, and only request AWS termination when `--terminate` is explicitly supplied.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
-- `proposal.md#Failure Modes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Failure Modes`
 
 #### Scenario: Local Remove Without Termination [BOX-RM-LOCAL]
 WHEN `rm <alias>` is invoked without `--terminate`, THE devbox domain SHALL remove the alias locally even if the tracked instance is stale.
@@ -179,8 +204,10 @@ IF `rm --terminate` receives accepted termination or already-absent handling fro
 WHEN `switch <alias>` is invoked for a tracked alias, THE devbox domain SHALL set `current` to that alias without mutating any other tracked box.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Switch Success [BOX-SWITCH-SUCCESS]
 WHEN the user invokes `switch` for an existing alias, THE devbox domain SHALL commit `current = alias`.
@@ -196,8 +223,10 @@ IF the user invokes `switch` for an alias that is not tracked, THEN THE devbox d
 WHEN a mutating registry command commits config state, THE devbox adapter SHALL use single-writer advisory locking, temp-file write, `fsync`, atomic replace, and best-effort stale-lock recovery.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Successful Atomic Replace [BOX-ATOMIC-SUCCESS]
 WHEN the adapter acquires the advisory lock and completes the write flow successfully, THE devbox adapter SHALL leave a schema-valid committed config and remove the lock file on normal completion.
@@ -213,8 +242,10 @@ IF the advisory lock is held by a live, recent process and is not stale, THEN TH
 WHEN `devbox list` prints tracked boxes, THE devbox CLI SHALL render a human-readable terminal table with columns: current-box indicator, alias, instance ID, instance type, and state.
 
 **References:**
-- `proposal.md#Scope`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Table With Current Indicator [BOX-LIST-TABLE]
 WHEN tracked boxes exist and AWS enrichment succeeds, THE devbox CLI SHALL print a table where the current box row is marked with `*` in the first column and other rows show a space.
@@ -230,7 +261,9 @@ WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes 
 WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0600` (read-write for the user only).
 
 **References:**
-- `proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
 #### Scenario: Config Created With Standard Permissions [BOX-PERMS-CONFIG]
 WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0600` (read-write for the user only).
@@ -241,8 +274,10 @@ WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE 
 WHEN the advisory lock file exists and the current process needs to acquire it, THE devbox adapter SHALL detect staleness using PID validity, PID liveness, and a 5-minute mtime threshold.
 
 **References:**
-- `proposal.md#Quality Attributes`
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Stale Lock By Dead PID [BOX-STALELOCK-PID]
 WHEN the lock file contains a PID that does not correspond to a running process, THE devbox adapter SHALL treat the lock as stale, remove it, and retry acquisition once.
@@ -263,7 +298,9 @@ WHEN the lock file contains a valid PID of a running process and the mtime is wi
 WHEN `rm` removes an alias that is the current box, THE devbox domain SHALL clear `current` by removing it from config entirely rather than reassigning it to another box.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Current Becomes Absent After Remove [BOX-RM-CURRENT-CLEAR]
 WHEN `rm <alias>` removes the alias that is also `current`, THE devbox domain SHALL set `current` to absent in the committed config.
@@ -278,7 +315,9 @@ THE devbox domain SHALL reject `InstanceRequirements` and any unknown top-level 
 THE devbox domain SHALL always add `MinCount=1` and `MaxCount=1` to the `run-instances` invocation.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Unknown Template Field Rejected [BOX-INIT-UNKNOWN-FIELD]
 IF the template JSON contains a top-level key not in the accepted allowlist, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
@@ -296,7 +335,9 @@ WHEN `init` processes template JSON that contains `NetworkInterfaces`, THE devbo
 WHEN `init` processes template JSON that uses top-level `SecurityGroups` without `NetworkInterfaces`, THE devbox domain SHALL allow the request to proceed and surface any AWS rejection clearly if the account or network context does not support that request shape.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: NetworkInterfaces With Top Level SGs Rejected [BOX-INIT-NI-CONFLICT]
 IF the template contains both `NetworkInterfaces` and top-level `SecurityGroupIds` or `SecurityGroups`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
@@ -318,7 +359,9 @@ WHEN `init` validates required tags after merge, THE devbox domain SHALL enforce
 - `team`: must be a non-empty short identifier
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Invalid Tag Value Rejected [BOX-TAGS-VALUE-FAIL]
 IF any required tag has an empty or disallowed value after merge, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
@@ -341,7 +384,9 @@ Additional rules:
 - `Name` from the template is ignored and replaced with the alias
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Template Name Tag Overridden [BOX-TAGS-NAME-OVERRIDE]
 WHEN the template includes a `Name` tag in its instance `TagSpecification`, THE devbox domain SHALL replace it with the alias.
@@ -359,7 +404,9 @@ WHEN template JSON contains a `UserData` field, THE devbox domain SHALL pass the
 Values such as `file:~/some-file.sh` MUST be preserved exactly because AWS CLI handles special prefixes and base64 encoding behavior itself.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: UserData File Prefix Preserved [BOX-INIT-USERDATA-FILE]
 WHEN the template `UserData` value begins with `file:`, THE devbox domain SHALL pass it unchanged to `aws ec2 run-instances`.
@@ -378,7 +425,9 @@ THE devbox domain SHALL NOT invent environment-specific `ImageId` or `IamInstanc
 WHEN `init` proceeds after first-run synthesis or config load, THE devbox domain SHALL fail with `ValidationError` if `ImageId` or `IamInstanceProfile` is absent after merging template values over config defaults.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Init Fails Without ImageId After Merge [BOX-CONFIG-MISSING-IMAGEID]
 IF neither the template nor config defaults supply `ImageId`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
@@ -398,7 +447,9 @@ If the tracked set exceeds AWS CLI per-call limits, THE devbox domain SHALL spli
 Instances returned by AWS are enriched with live state and instance type. Tracked instance IDs omitted from an otherwise successful AWS response are shown as `stale`. If a full enrichment batch fails because AWS is unavailable, credentials are missing, or the local `aws` executable is absent, THE devbox CLI SHALL still succeed and show all rows as `unknown`.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Single Batch Enrichment [BOX-LIST-BATCH-SINGLE]
 WHEN all tracked instance IDs fit within a single AWS CLI call, THE devbox domain SHALL issue one `describe-instances` call rather than one call per alias.
@@ -414,15 +465,11 @@ WHEN the enrichment batch fails because AWS is unreachable or the `aws` executab
 WHEN `rm <alias>` is invoked without `--terminate`, THE devbox CLI SHALL print a warning that the AWS resources associated with the removed alias may still exist.
 
 **References:**
-- `proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
 
 #### Scenario: Local Remove Warns About AWS Resources [BOX-RM-WARN-MSG]
 WHEN `rm <alias>` succeeds without `--terminate`, THE devbox CLI SHALL emit a warning to stderr indicating that the tracked instance may still be running in AWS.
 
 **Postcondition:** The user is informed that local removal does not affect AWS resource lifecycle.
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
-
-## RENAMED Requirements

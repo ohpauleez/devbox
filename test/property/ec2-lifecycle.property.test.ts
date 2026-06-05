@@ -39,7 +39,7 @@ describe("decideUpAction", () => {
   });
 
   it("returns err for shutting-down/terminated/stopping/unknown", () => {
-    traceSpec("LIFE-UP-FAIL");
+    traceSpec("LIFE-DOMAIN-UP", "LIFE-UP-FAIL");
 
     fc.assert(
       fc.property(fc.constantFrom(...upErrStates), (state) => {
@@ -68,7 +68,7 @@ describe("decideDownAction", () => {
   });
 
   it("returns err for shutting-down/terminated/pending/unknown", () => {
-    traceSpec("LIFE-DOWN-FAIL");
+    traceSpec("LIFE-DOMAIN-DOWN", "LIFE-DOWN-FAIL");
 
     fc.assert(
       fc.property(fc.constantFrom(...downErrStates), (state) => {
@@ -89,7 +89,7 @@ describe("waitForEc2TargetState", () => {
   });
 
   it("succeeds when target state appears in trace", async () => {
-    traceSpec("LIFE-POLL-SUCCESS");
+    traceSpec("LIFE-ADAPTER-POLL", "LIFE-POLL-SUCCESS");
 
     await fc.assert(
       fc.asyncProperty(

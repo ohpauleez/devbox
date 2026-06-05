@@ -40,6 +40,8 @@ afterEach(() => {
 
 describe("traceSpec runtime validation", () => {
   it("accepts ordinary traced tests", () => {
+    traceSpec("TRACE-ID-BARE", "TRACE-TEST-DECL", "TRACE-RUN-VALIDATE", "TRACE-COVERAGE-OFF");
+
     const state = installTraceState(["TRACE-RUNTIME-OK"]);
 
     traceSpec("TRACE-RUNTIME-OK");
@@ -48,6 +50,8 @@ describe("traceSpec runtime validation", () => {
   });
 
   it("accepts async traced tests", async () => {
+    traceSpec("TRACE-TEST-DECL");
+
     const state = installTraceState(["TRACE-RUNTIME-ASYNC"]);
 
     await Promise.resolve();
@@ -59,6 +63,8 @@ describe("traceSpec runtime validation", () => {
   it.each(["TRACE-RUNTIME-EACH-A", "TRACE-RUNTIME-EACH-B"])(
     "accepts parameterized traced tests for %s",
     (identifier) => {
+      traceSpec("TRACE-TEST-DECL");
+
       const state = installTraceState(["TRACE-RUNTIME-EACH-A", "TRACE-RUNTIME-EACH-B"]);
 
       traceSpec(identifier);
@@ -68,24 +74,32 @@ describe("traceSpec runtime validation", () => {
   );
 
   it("fails on empty trace declarations", () => {
+    traceSpec("TRACE-TEST-EMPTY");
+
     installTraceState(["TRACE-RUNTIME-EMPTY"]);
 
     expect(() => traceSpec()).toThrowError(/at least one canonical identifier/u);
   });
 
   it("fails on malformed identifiers with a format-specific diagnostic", () => {
+    traceSpec("TRACE-TEST-MALFORMED");
+
     installTraceState(["TRACE-RUNTIME-MALFORMED"]);
 
     expect(() => traceSpec("trace-runtime-malformed")).toThrowError(/malformed identifier/u);
   });
 
   it("fails on unknown identifiers with a catalog-specific diagnostic", () => {
+    traceSpec("TRACE-TEST-UNKNOWN", "TRACE-RUN-VALIDATE", "TRACE-RUN-SUBSET");
+
     installTraceState(["TRACE-RUNTIME-KNOWN"]);
 
     expect(() => traceSpec("TRACE-RUNTIME-UNKNOWN")).toThrowError(/unknown identifier/u);
   });
 
   it("de-duplicates repeated identifiers within one test for accounting", () => {
+    traceSpec("TRACE-TEST-DEDUPE");
+
     const state = installTraceState(["TRACE-RUNTIME-DEDUPE"]);
 
     traceSpec("TRACE-RUNTIME-DEDUPE", "TRACE-RUNTIME-DEDUPE");
@@ -97,6 +111,8 @@ describe("traceSpec runtime validation", () => {
 
 describe("spec trace coverage reporting", () => {
   it("reports uncovered identifiers with provenance when coverage mode is enabled", () => {
+    traceSpec("TRACE-RUN-COVERAGE", "TRACE-COVERAGE-FAIL", "TRACE-DIAG-PROVENANCE", "TRACE-DIAG-UNCOVERED");
+
     const state = installTraceState(["TRACE-COVERAGE-A", "TRACE-COVERAGE-B"], true);
 
     recordTraceDeclaration(state, "test-a", ["TRACE-COVERAGE-A"]);
@@ -108,6 +124,8 @@ describe("spec trace coverage reporting", () => {
   });
 
   it("passes coverage mode trivially for an empty catalog", () => {
+    traceSpec("TRACE-RUN-COVERAGE", "TRACE-COVERAGE-EMPTY");
+
     const state = installTraceState([], true);
 
     expect(computeUncoveredCatalogEntries(state)).toEqual([]);
@@ -115,6 +133,8 @@ describe("spec trace coverage reporting", () => {
   });
 
   it("ignores untraced tests for coverage accounting", () => {
+    traceSpec("TRACE-TEST-UNTRACED", "TRACE-UNTRACED-PASS");
+
     const state = installTraceState(["TRACE-UNTRACED-A"], true);
 
     expect(state.seenIdentifiers).toEqual(new Set());

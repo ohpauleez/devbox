@@ -3,29 +3,40 @@ import { parseRemotePath } from "../../src/domain/remote-path.js";
 import { resolveSshUser } from "../../src/domain/ssh-user.js";
 import { resolveCurrentBox } from "../../src/domain/context.js";
 import type { BoxAlias, BoxConfig, DefaultsConfig, DevboxConfig, InstanceId, SshUser } from "../../src/domain/types.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 describe("parseRemotePath", () => {
   it("accepts valid paths", () => {
+    traceSpec("REMOTE-DOMAIN-PATH", "REMOTE-PATH-ACCEPT");
+
     expect(parseRemotePath("/home/user/file.txt").ok).toBe(true);
     expect(parseRemotePath("relative/path").ok).toBe(true);
   });
 
   it("rejects empty", () => {
+    traceSpec("REMOTE-DOMAIN-PATH", "REMOTE-PATH-FAIL");
+
     const result = parseRemotePath("");
     expect(result.ok).toBe(false);
   });
 
   it("rejects whitespace-only", () => {
+    traceSpec("REMOTE-DOMAIN-PATH", "REMOTE-PATH-FAIL");
+
     const result = parseRemotePath("   ");
     expect(result.ok).toBe(false);
   });
 
   it("rejects control chars", () => {
+    traceSpec("REMOTE-DOMAIN-PATH", "REMOTE-PATH-FAIL");
+
     const result = parseRemotePath("/home/user/\x01file");
     expect(result.ok).toBe(false);
   });
 
   it("rejects null bytes", () => {
+    traceSpec("REMOTE-DOMAIN-PATH", "REMOTE-PATH-FAIL");
+
     const result = parseRemotePath("/home/user/\x00file");
     expect(result.ok).toBe(false);
   });
@@ -38,24 +49,32 @@ describe("resolveSshUser", () => {
   const defaultsWithUser: DefaultsConfig = { ...defaults, sshUser: "defaultuser" as SshUser };
 
   it("invocation override wins", () => {
+    traceSpec("BOX-DOMAIN-SSHUSER", "REMOTE-DOMAIN-SSHUSER", "REMOTE-CLI-SSHUSER");
+
     const result = resolveSshUser({ invocationOverride: "cliuser", box: boxWithUser, defaults: defaultsWithUser });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value).toBe("cliuser");
   });
 
   it("box override wins over defaults", () => {
+    traceSpec("BOX-DOMAIN-SSHUSER", "REMOTE-DOMAIN-SSHUSER", "BOX-SSHUSER-BOX");
+
     const result = resolveSshUser({ box: boxWithUser, defaults: defaultsWithUser });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value).toBe("boxuser");
   });
 
   it("defaults used as fallback", () => {
+    traceSpec("BOX-DOMAIN-SSHUSER", "REMOTE-DOMAIN-SSHUSER", "REMOTE-SSHUSER-DEFAULT");
+
     const result = resolveSshUser({ box, defaults: defaultsWithUser });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value).toBe("defaultuser");
   });
 
   it("missing all three fails", () => {
+    traceSpec("BOX-DOMAIN-SSHUSER", "REMOTE-DOMAIN-SSHUSER", "REMOTE-SSHUSER-FAIL");
+
     const result = resolveSshUser({ box, defaults });
     expect(result.ok).toBe(false);
   });
@@ -66,12 +85,16 @@ describe("resolveCurrentBox", () => {
   const validDefaults: DefaultsConfig = { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } };
 
   it("no current -> error", () => {
+    traceSpec("REMOTE-CLI-FAIL");
+
     const config: DevboxConfig = { boxes: { mybox: boxConfig } as Record<BoxAlias, BoxConfig>, defaults: validDefaults };
     const result = resolveCurrentBox(config);
     expect(result.ok).toBe(false);
   });
 
   it("current not in boxes -> error", () => {
+    traceSpec("REMOTE-CLI-FAIL");
+
     const config: DevboxConfig = {
       boxes: { mybox: boxConfig } as Record<BoxAlias, BoxConfig>,
       defaults: validDefaults,
@@ -82,6 +105,8 @@ describe("resolveCurrentBox", () => {
   });
 
   it("valid -> success", () => {
+    traceSpec("REMOTE-CLI-CMDS", "REMOTE-DOMAIN-PRECOND");
+
     const config: DevboxConfig = {
       boxes: { mybox: boxConfig } as Record<BoxAlias, BoxConfig>,
       defaults: validDefaults,

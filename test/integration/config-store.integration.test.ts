@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
@@ -11,6 +11,7 @@ import {
 import { synthesizeFirstRunConfig } from "../../src/domain/config-schema.js";
 import { BUILTIN_REQUIRED_TAG_DEFAULTS } from "../../src/domain/tags.js";
 import type { DevboxConfig } from "../../src/domain/types.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 function makePaths(directory: string): ConfigStorePaths {
   return {
@@ -41,6 +42,8 @@ describe("config-store integration", () => {
   });
 
   it("loadConfig with missing file returns synthesized first-run config", async () => {
+    traceSpec("BOX-DOMAIN-STATE", "BOX-DOMAIN-CONFIG", "BOX-DOMAIN-CONFIG-CREATION", "BOX-CONFIG-FIRSTRUN");
+
     const result = await loadConfig(paths);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -63,6 +66,8 @@ describe("config-store integration", () => {
   });
 
   it("loadConfig with invalid JSON returns ConfigError", async () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-CONFIG-FAIL");
+
     await writeFile(paths.configFile, "not valid json {{{", "utf8");
 
     const result = await loadConfig(paths);
@@ -80,6 +85,16 @@ describe("config-store integration", () => {
     expect(loadResult.ok).toBe(true);
     if (!loadResult.ok) return;
     expect(loadResult.value).toEqual(config);
+  });
+
+  it("commitConfig creates config file with owner-only permissions", async () => {
+    traceSpec("BOX-ADAPTER-PERMS", "BOX-PERMS-CONFIG");
+
+    const commitResult = await commitConfig(validConfig(), paths);
+    expect(commitResult.ok).toBe(true);
+
+    const fileStat = await stat(paths.configFile);
+    expect(fileStat.mode & 0o777).toBe(0o600);
   });
 
   it("commitConfig creates directory if missing", async () => {
@@ -101,6 +116,8 @@ describe("config-store integration", () => {
   });
 
   it("commitConfig acquires lock and releases it after completion", async () => {
+    traceSpec("BOX-ADAPTER-ATOMIC", "BOX-ATOMIC-SUCCESS");
+
     const result = await commitConfig(validConfig(), paths);
     expect(result.ok).toBe(true);
 
@@ -115,6 +132,8 @@ describe("config-store integration", () => {
   });
 
   it("concurrent commitConfig with active lock returns lock-held error", async () => {
+    traceSpec("BOX-ADAPTER-ATOMIC", "BOX-ATOMIC-FAIL", "BOX-ADAPTER-STALELOCK", "BOX-STALELOCK-LIVE");
+
     // Simulate an active lock held by our own process (current PID is alive)
     await writeFile(paths.lockFile, `${process.pid}\n`, "utf8");
 
@@ -126,6 +145,8 @@ describe("config-store integration", () => {
   });
 
   it("stale lock recovery: lock with non-existent PID allows commitConfig to succeed", async () => {
+    traceSpec("BOX-ADAPTER-STALELOCK", "BOX-STALELOCK-PID");
+
     // Use a PID that almost certainly doesn't exist
     const stalePid = 2147483000;
     await writeFile(paths.lockFile, `${stalePid}\n`, "utf8");
@@ -135,5 +156,16 @@ describe("config-store integration", () => {
 
     const loadResult = await loadConfig(paths);
     expect(loadResult.ok).toBe(true);
+  });
+
+  it("stale lock recovery: old lock mtime is treated as stale", async () => {
+    traceSpec("BOX-ADAPTER-STALELOCK", "BOX-STALELOCK-AGE");
+
+    await writeFile(paths.lockFile, `${process.pid}\n`, "utf8");
+    const staleDate = new Date(Date.now() - 10 * 60 * 1000);
+    await utimes(paths.lockFile, staleDate, staleDate);
+
+    const result = await commitConfig(validConfig(), paths);
+    expect(result.ok).toBe(true);
   });
 });

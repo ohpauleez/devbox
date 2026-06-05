@@ -4,9 +4,12 @@ import {
   decideDownAction,
   type Ec2InstanceState,
 } from "../../src/domain/instance-state.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 describe("decideUpAction", () => {
   it("running -> no submit, no wait", () => {
+    traceSpec("LIFE-UP-IDEMPOTENT");
+
     const result = decideUpAction("running");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -16,6 +19,8 @@ describe("decideUpAction", () => {
   });
 
   it("pending -> no submit, wait", () => {
+    traceSpec("LIFE-UP-PENDING");
+
     const result = decideUpAction("pending");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -25,6 +30,8 @@ describe("decideUpAction", () => {
   });
 
   it("stopped -> submit, wait", () => {
+    traceSpec("LIFE-UP-START");
+
     const result = decideUpAction("stopped");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -36,6 +43,8 @@ describe("decideUpAction", () => {
   it.each(["shutting-down", "terminated", "stopping", "unknown"] as Ec2InstanceState[])(
     "%s -> error",
     (state) => {
+      traceSpec("LIFE-UP-FAIL");
+
       const result = decideUpAction(state);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.category).toBe("InstanceStateError");
@@ -45,6 +54,8 @@ describe("decideUpAction", () => {
 
 describe("decideDownAction", () => {
   it("stopped -> no submit, no wait", () => {
+    traceSpec("LIFE-DOWN-IDEMPOTENT");
+
     const result = decideDownAction("stopped");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -54,6 +65,8 @@ describe("decideDownAction", () => {
   });
 
   it("stopping -> no submit, wait", () => {
+    traceSpec("LIFE-DOWN-STOPPING");
+
     const result = decideDownAction("stopping");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -63,6 +76,8 @@ describe("decideDownAction", () => {
   });
 
   it("running -> submit, wait", () => {
+    traceSpec("LIFE-DOWN-STOP");
+
     const result = decideDownAction("running");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -74,6 +89,8 @@ describe("decideDownAction", () => {
   it.each(["shutting-down", "terminated", "pending", "unknown"] as Ec2InstanceState[])(
     "%s -> error",
     (state) => {
+      traceSpec("LIFE-DOWN-FAIL");
+
       const result = decideDownAction(state);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.category).toBe("InstanceStateError");

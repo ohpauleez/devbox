@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { traceSpec } from "../support/spec-trace.js";
 
 import {
   buildCanonicalCatalogFromFiles,
@@ -24,6 +25,8 @@ async function writeTempFile(filePath: string, content: string): Promise<void> {
 
 describe("spec trace catalog discovery", () => {
   it("includes canonical specs and active changes but excludes archive and unrelated paths", async () => {
+    traceSpec("TRACE-CATALOG-SCOPE", "TRACE-CATALOG-INCLUDE", "TRACE-CATALOG-EXCLUDE");
+
     const rootDir = await mkdtemp(join(tmpdir(), "devbox-spec-trace-"));
     const includedSpec = join(rootDir, "openspec/specs/capability/spec.md");
     const activeChangeSpec = join(rootDir, "openspec/changes/change-a/specs/capability/spec.md");
@@ -43,6 +46,8 @@ describe("spec trace catalog discovery", () => {
 
 describe("spec trace markdown scanner", () => {
   it("extracts bracketed identifiers and keeps nearest heading provenance", () => {
+    traceSpec("TRACE-ID-SYNTAX", "TRACE-ID-EXTRACT", "TRACE-CATALOG-PROVENANCE", "TRACE-PROVENANCE-HEADING");
+
     const markdown = [
       "### Requirement: Catalog scope [TRACE-CATALOG-SCOPE]",
       "Normal prose mentioning [TRACE-CATALOG-INCLUDE].",
@@ -79,6 +84,8 @@ describe("spec trace markdown scanner", () => {
   });
 
   it("ignores bare tokens, inline code, and fenced code blocks", () => {
+    traceSpec("TRACE-CATALOG-CODE", "TRACE-ID-IGNORE", "TRACE-CODE-INLINE", "TRACE-CODE-FENCE");
+
     const markdown = [
       "### Requirement: Syntax [TRACE-ID-SYNTAX]",
       "A bare TRACE-ID-IGNORE token must not count.",
@@ -98,6 +105,8 @@ describe("spec trace markdown scanner", () => {
 
 describe("spec trace canonical catalog", () => {
   it("keeps the first same-file occurrence and rejects cross-file duplicates", async () => {
+    traceSpec("TRACE-DIAG-DUPE", "TRACE-DUPE-CROSSFILE", "TRACE-DUPE-SAMEFILE");
+
     const rootDir = await mkdtemp(join(tmpdir(), "devbox-spec-trace-"));
     const firstFile = join(rootDir, "openspec/specs/one/spec.md");
     const secondFile = join(rootDir, "openspec/specs/two/spec.md");

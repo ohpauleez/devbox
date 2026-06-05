@@ -6,6 +6,7 @@ import {
 } from "../../src/domain/config-schema.js";
 import { BUILTIN_REQUIRED_TAG_DEFAULTS } from "../../src/domain/tags.js";
 import type { DevboxConfig } from "../../src/domain/types.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 const validConfig = {
   boxes: { mybox: { instanceId: "i-abc123" } },
@@ -23,6 +24,8 @@ const validConfig = {
 
 describe("parseConfig", () => {
   it("accepts a valid config", () => {
+    traceSpec("BOX-DOMAIN-STATE", "BOX-DOMAIN-CONFIG", "BOX-CURRENT-VALID");
+
     const result = parseConfig(validConfig);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -37,12 +40,16 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing boxes", () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-CONFIG-FAIL");
+
     const result = parseConfig({ defaults: validConfig.defaults });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.category).toBe("ConfigError");
   });
 
   it("rejects missing defaults", () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-CONFIG-FAIL");
+
     const result = parseConfig({ boxes: {} });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.category).toBe("ConfigError");
@@ -68,6 +75,8 @@ describe("parseConfig", () => {
 
   describe("current field", () => {
     it("current absent is fine", () => {
+      traceSpec("BOX-DOMAIN-STATE", "BOX-CURRENT-VALID");
+
       const result = parseConfig({
         boxes: { mybox: { instanceId: "i-abc123" } },
         defaults: validConfig.defaults,
@@ -77,6 +86,8 @@ describe("parseConfig", () => {
     });
 
     it("current pointing to missing alias rejects", () => {
+      traceSpec("BOX-DOMAIN-STATE", "BOX-CURRENT-FAIL");
+
       const result = parseConfig({
         boxes: { mybox: { instanceId: "i-abc123" } },
         defaults: validConfig.defaults,
@@ -86,6 +97,8 @@ describe("parseConfig", () => {
     });
 
     it("current pointing to existing alias passes", () => {
+      traceSpec("BOX-DOMAIN-STATE", "BOX-CURRENT-VALID");
+
       const result = parseConfig(validConfig);
       expect(result.ok).toBe(true);
     });
@@ -94,16 +107,22 @@ describe("parseConfig", () => {
 
 describe("synthesizeFirstRunConfig", () => {
   it("returns empty boxes", () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-DOMAIN-CONFIG-CREATION", "BOX-CONFIG-FIRSTRUN");
+
     const config = synthesizeFirstRunConfig();
     expect(Object.keys(config.boxes)).toHaveLength(0);
   });
 
   it("has valid defaults with built-in tag defaults", () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-DOMAIN-CONFIG-CREATION", "BOX-CONFIG-FIRSTRUN");
+
     const config = synthesizeFirstRunConfig();
     expect(config.defaults.tags).toEqual(BUILTIN_REQUIRED_TAG_DEFAULTS);
   });
 
   it("has no current", () => {
+    traceSpec("BOX-DOMAIN-CONFIG", "BOX-DOMAIN-CONFIG-CREATION", "BOX-CONFIG-FIRSTRUN");
+
     const config = synthesizeFirstRunConfig();
     expect(config.current).toBeUndefined();
   });

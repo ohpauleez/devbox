@@ -4,9 +4,42 @@ import { makeTypedError, type AwsReadError, type TimeoutError } from "./errors.j
 import { err, ok, type Result } from "./result.js";
 import { EC2_POLL_INTERVAL_MS, EC2_WAIT_TIMEOUT_MS, SSM_POLL_INTERVAL_MS, SSM_WAIT_TIMEOUT_MS, REAL_CLOCK, type Clock } from "./wait-policy.js";
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function createPollingAbortSignal(): { readonly signal: AbortSignal; readonly cleanup: () => void } {
+  const controller = new AbortController();
+  const abort = (): void => {
+    controller.abort();
+  };
+
+  process.on("SIGINT", abort);
+  process.on("SIGTERM", abort);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      process.off("SIGINT", abort);
+      process.off("SIGTERM", abort);
+    },
+  };
+}
+
+async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -88,32 +121,41 @@ export async function waitForEc2TargetState(
 ): Promise<Result<WaitEc2TargetSuccess, AwsReadError | TimeoutError>> {
   const startedAtMs = clock.nowMs();
   let lastObservedState: Ec2InstanceState = "unknown";
+  const pollingAbort = createPollingAbortSignal();
 
   // Goal: poll until the instance reaches the expected state or time runs out.
-  while (clock.nowMs() - startedAtMs <= EC2_WAIT_TIMEOUT_MS) {
-    // Query current state from the adapter.
-    const describeResult = await describe(input.instanceId);
-    if (!describeResult.ok) {
-      return describeResult;
-    }
-    lastObservedState = describeResult.value.state;
-    // Check if target is reached — exit early on success.
-    if (lastObservedState === input.expectedState) {
-      return ok({
-        lastObservedState,
-        elapsedMs: clock.nowMs() - startedAtMs,
-      });
-    }
-    // Sleep before next poll to avoid API throttling.
-    await sleep(EC2_POLL_INTERVAL_MS);
-  }
+  try {
+    while (clock.nowMs() - startedAtMs <= EC2_WAIT_TIMEOUT_MS) {
+      if (pollingAbort.signal.aborted) {
+        return err(makeTypedError("TimeoutError", `instance polling aborted by signal while waiting for ${input.expectedState}`));
+      }
 
-  return err(
-    makeTypedError(
-      "TimeoutError",
-      `instance ${input.instanceId} did not reach ${input.expectedState} within ${Math.floor(EC2_WAIT_TIMEOUT_MS / 1000)}s (last: ${lastObservedState})`,
-    ),
-  );
+      // Query current state from the adapter.
+      const describeResult = await describe(input.instanceId);
+      if (!describeResult.ok) {
+        return describeResult;
+      }
+      lastObservedState = describeResult.value.state;
+      // Check if target is reached — exit early on success.
+      if (lastObservedState === input.expectedState) {
+        return ok({
+          lastObservedState,
+          elapsedMs: clock.nowMs() - startedAtMs,
+        });
+      }
+      // Sleep before next poll to avoid API throttling.
+      await sleepWithAbort(EC2_POLL_INTERVAL_MS, pollingAbort.signal);
+    }
+
+    return err(
+      makeTypedError(
+        "TimeoutError",
+        `instance ${input.instanceId} did not reach ${input.expectedState} within ${Math.floor(EC2_WAIT_TIMEOUT_MS / 1000)}s (last: ${lastObservedState})`,
+      ),
+    );
+  } finally {
+    pollingAbort.cleanup();
+  }
 }
 
 /**
@@ -144,19 +186,28 @@ export async function waitForSsmOnline(
   clock: Clock = REAL_CLOCK,
 ): Promise<Result<void, AwsReadError | TimeoutError>> {
   const startedAtMs = clock.nowMs();
+  const pollingAbort = createPollingAbortSignal();
   // Goal: poll until SSM reports "Online" or time runs out.
-  while (clock.nowMs() - startedAtMs <= SSM_WAIT_TIMEOUT_MS) {
-    const statusResult = await getStatus();
-    if (!statusResult.ok) {
-      return statusResult;
-    }
-    // "Online" means the SSM agent is ready to accept sessions.
-    if (statusResult.value === "Online") {
-      return ok(undefined);
-    }
-    // Sleep before next poll to avoid API throttling.
-    await sleep(SSM_POLL_INTERVAL_MS);
-  }
+  try {
+    while (clock.nowMs() - startedAtMs <= SSM_WAIT_TIMEOUT_MS) {
+      if (pollingAbort.signal.aborted) {
+        return err(makeTypedError("TimeoutError", "SSM readiness polling aborted by signal"));
+      }
 
-  return err(makeTypedError("TimeoutError", "instance did not become SSM-ready within 120s"));
+      const statusResult = await getStatus();
+      if (!statusResult.ok) {
+        return statusResult;
+      }
+      // "Online" means the SSM agent is ready to accept sessions.
+      if (statusResult.value === "Online") {
+        return ok(undefined);
+      }
+      // Sleep before next poll to avoid API throttling.
+      await sleepWithAbort(SSM_POLL_INTERVAL_MS, pollingAbort.signal);
+    }
+
+    return err(makeTypedError("TimeoutError", "instance did not become SSM-ready within 120s"));
+  } finally {
+    pollingAbort.cleanup();
+  }
 }

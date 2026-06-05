@@ -169,6 +169,12 @@ export async function runCpCommand(
     });
   } finally {
     // Cleanup is unconditional — keys must be removed regardless of success/failure.
-    await cleanupLocalTempKeys(key);
+    // Cleanup failures are swallowed: they must not mask a transport or consistency error.
+    try {
+      await cleanupLocalTempKeys(key);
+    } catch {
+      // Best-effort: the bounded remote cleanup (15s background job) remains active
+      // even if local file removal fails.
+    }
   }
 }

@@ -5,12 +5,15 @@ import {
   matchesInstanceIdAdvisoryPattern,
 } from "../../src/domain/alias.js";
 import type { BoxAlias } from "../../src/domain/types.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 describe("parseAlias", () => {
   describe("valid aliases", () => {
     it.each(["mybox", "a", "A1-test_2", "a".repeat(64)])(
       "accepts %s",
       (alias) => {
+        traceSpec("BOX-DOMAIN-ALIAS", "BOX-ALIAS-ACCEPT");
+
         const result = parseAlias(alias);
         expect(result.ok).toBe(true);
         if (result.ok) expect(result.value).toBe(alias);
@@ -27,6 +30,8 @@ describe("parseAlias", () => {
       ["special chars", "my@box"],
       ["spaces", "my box"],
     ])("rejects %s", (_label, alias) => {
+      traceSpec("BOX-DOMAIN-ALIAS", "BOX-ALIAS-FAIL");
+
       const result = parseAlias(alias);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.category).toBe("ValidationError");
@@ -38,11 +43,15 @@ describe("ensureAliasAvailable", () => {
   const tracked = { mybox: { instanceId: "i-123" } } as unknown as Record<BoxAlias, unknown>;
 
   it("passes for new alias", () => {
+    traceSpec("BOX-DOMAIN-ALIAS", "BOX-ALIAS-ACCEPT");
+
     const result = ensureAliasAvailable("newbox" as BoxAlias, tracked);
     expect(result.ok).toBe(true);
   });
 
   it("fails for existing alias", () => {
+    traceSpec("BOX-DOMAIN-ALIAS", "BOX-ALIAS-FAIL");
+
     const result = ensureAliasAvailable("mybox" as BoxAlias, tracked);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toContain("already tracked");

@@ -6,6 +6,7 @@ import {
 } from "../../src/domain/tags.js";
 import { mapInitTemplateToRunInstances } from "../../src/domain/init-mapper.js";
 import type { DefaultsConfig } from "../../src/domain/types.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 const validTags = {
   env: "dev",
@@ -22,21 +23,29 @@ describe("validateRequiredTags", () => {
   });
 
   it("rejects invalid env", () => {
+    traceSpec("BOX-DOMAIN-TAGS-VALUES", "BOX-TAGS-VALUE-FAIL");
+
     const result = validateRequiredTags({ ...validTags, env: "production" });
     expect(result.ok).toBe(false);
   });
 
   it("rejects bad version length (too short)", () => {
+    traceSpec("BOX-DOMAIN-TAGS-VALUES", "BOX-TAGS-VALUE-FAIL");
+
     const result = validateRequiredTags({ ...validTags, version: "abc" });
     expect(result.ok).toBe(false);
   });
 
   it("rejects bad version length (too long)", () => {
+    traceSpec("BOX-DOMAIN-TAGS-VALUES", "BOX-TAGS-VALUE-FAIL");
+
     const result = validateRequiredTags({ ...validTags, version: "a".repeat(41) });
     expect(result.ok).toBe(false);
   });
 
   it("rejects bad customer-data", () => {
+    traceSpec("BOX-DOMAIN-TAGS-VALUES", "BOX-TAGS-VALUE-FAIL");
+
     const result = validateRequiredTags({ ...validTags, "customer-data": "yes" });
     expect(result.ok).toBe(false);
   });
@@ -63,6 +72,8 @@ describe("Name tag forced to alias", () => {
   };
 
   it("Name tag is always forced to alias value regardless of template tags", () => {
+    traceSpec("BOX-DOMAIN-TAGS-MERGE", "BOX-TAGS-NAME-OVERRIDE");
+
     const template = {
       ImageId: "ami-template",
       TagSpecifications: [

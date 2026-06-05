@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, it, expect, beforeAll } from "vitest";
+import { traceSpec } from "../support/spec-trace.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -17,6 +18,8 @@ describe("package metadata and build configuration", () => {
   });
 
   it("package.json has bin field pointing to dist/src/index.js", () => {
+    traceSpec("DIST-NPM-SUCCESS");
+
     const bin = pkg.bin as Record<string, string> | string;
     if (typeof bin === "string") {
       expect(bin).toContain("dist/src/index.js");
@@ -26,10 +29,14 @@ describe("package metadata and build configuration", () => {
   });
 
   it('package.json has type: "module"', () => {
+    traceSpec("DIST-NPM-SUCCESS");
+
     expect(pkg.type).toBe("module");
   });
 
   it("package.json engines requires node >= 20", () => {
+    traceSpec("DIST-NPM-SUCCESS", "DIST-CLI-BUNDLE");
+
     const engines = pkg.engines as Record<string, string>;
     expect(engines).toBeDefined();
     expect(engines.node).toBeDefined();
@@ -37,11 +44,15 @@ describe("package metadata and build configuration", () => {
   });
 
   it("tsconfig.json has strict: true", () => {
+    traceSpec("TRACE-REVIEW-PASS");
+
     const compilerOptions = tsconfig.compilerOptions as Record<string, unknown>;
     expect(compilerOptions.strict).toBe(true);
   });
 
   it("tsconfig.json has noUncheckedIndexedAccess: true", () => {
+    traceSpec("TRACE-REVIEW-PASS");
+
     const compilerOptions = tsconfig.compilerOptions as Record<string, unknown>;
     expect(compilerOptions.noUncheckedIndexedAccess).toBe(true);
   });

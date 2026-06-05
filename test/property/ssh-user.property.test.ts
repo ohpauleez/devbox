@@ -3,6 +3,7 @@ import fc from "fast-check";
 import { resolveSshUser } from "../../src/domain/ssh-user.js";
 import type { BoxConfig, DefaultsConfig, InstanceId, SshUser } from "../../src/domain/types.js";
 import { BUILTIN_REQUIRED_TAG_DEFAULTS } from "../../src/domain/tags.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 const sshUserStr = fc.stringMatching(/^[a-z][a-z0-9_-]{0,7}$/);
 const emptyDefaults: DefaultsConfig = { tags: BUILTIN_REQUIRED_TAG_DEFAULTS };
@@ -10,6 +11,8 @@ const emptyBox: BoxConfig = { instanceId: "i-00000000000000000" as InstanceId };
 
 describe("resolveSshUser precedence", () => {
   it("invocationOverride takes highest precedence", () => {
+    traceSpec("REMOTE-CLI-SSHUSER");
+
     fc.assert(
       fc.property(sshUserStr, sshUserStr, sshUserStr, (override, boxUser, defaultUser) => {
         const result = resolveSshUser({
@@ -27,6 +30,8 @@ describe("resolveSshUser precedence", () => {
   });
 
   it("box.sshUser used when invocationOverride is empty", () => {
+    traceSpec("BOX-SSHUSER-BOX");
+
     fc.assert(
       fc.property(sshUserStr, sshUserStr, (boxUser, defaultUser) => {
         const result = resolveSshUser({
@@ -44,6 +49,8 @@ describe("resolveSshUser precedence", () => {
   });
 
   it("defaults.sshUser used when invocation and box are missing", () => {
+    traceSpec("REMOTE-SSHUSER-DEFAULT");
+
     fc.assert(
       fc.property(sshUserStr, (defaultUser) => {
         const result = resolveSshUser({
@@ -60,6 +67,8 @@ describe("resolveSshUser precedence", () => {
   });
 
   it("returns error when all sources are missing", () => {
+    traceSpec("REMOTE-SSHUSER-FAIL", "BOX-SSHUSER-FAIL");
+
     fc.assert(
       fc.property(fc.constant(null), () => {
         const result = resolveSshUser({
@@ -73,6 +82,8 @@ describe("resolveSshUser precedence", () => {
   });
 
   it("rejects invocation override containing embedded control characters", () => {
+    traceSpec("REMOTE-CLI-SSHUSER");
+
     // Generate strings where invalid chars appear BETWEEN valid chars,
     // so trim() cannot remove them. These must be rejected.
     const badUserArb = fc.tuple(

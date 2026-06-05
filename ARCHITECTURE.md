@@ -396,6 +396,5 @@ Escape hatch: When a requirement has more than 3 preconditions or is mathematica
 it MAY use decision tables, lists, or other formats. The requirement MUST include a
 justification for why EARS is insufficient.
 
-Specs are all traceable through the code and tests using [spec-traceability](docs/spec-traceability.md).
+Specs are all traceable through the code and tests using [spec-traceability](docs/spec_traceability.md).
 Test tooling ensures that all specs are covered by tests.
-

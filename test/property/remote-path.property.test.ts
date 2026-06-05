@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 import { parseRemotePath } from "../../src/domain/remote-path.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 describe("parseRemotePath", () => {
   it("succeeds for non-empty strings without control chars", () => {
+    traceSpec("REMOTE-PATH-ACCEPT");
+
     const safeStr = fc
       .string({ minLength: 1 })
       .filter((s) => s.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(s));
@@ -21,6 +24,8 @@ describe("parseRemotePath", () => {
   });
 
   it("fails for strings containing control characters", () => {
+    traceSpec("REMOTE-PATH-FAIL");
+
     const controlChar = fc.integer({ min: 0, max: 31 }).map((n) => String.fromCharCode(n));
     const withControl = fc
       .tuple(fc.string(), controlChar, fc.string())
@@ -39,6 +44,8 @@ describe("parseRemotePath", () => {
   });
 
   it("fails for empty or whitespace-only strings", () => {
+    traceSpec("REMOTE-PATH-FAIL");
+
     const whitespace = fc.stringOf(fc.constantFrom(" ", "\t", "\n", "\r"));
 
     fc.assert(

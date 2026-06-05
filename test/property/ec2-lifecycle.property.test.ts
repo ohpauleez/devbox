@@ -5,6 +5,7 @@ import type { Ec2InstanceState } from "../../src/domain/instance-state.js";
 import { waitForEc2TargetState, type DescribeInstanceFn } from "../../src/domain/ec2-wait.js";
 import type { InstanceDescription } from "../../src/adapters/aws-cli.js";
 import { ok } from "../../src/domain/result.js";
+import { traceSpec } from "../support/spec-trace.js";
 
 const ALL_STATES: Ec2InstanceState[] = [
   "pending",
@@ -23,6 +24,8 @@ const downErrStates: Ec2InstanceState[] = ["shutting-down", "terminated", "pendi
 
 describe("decideUpAction", () => {
   it("returns ok with targetState=running for running/pending/stopped", () => {
+    traceSpec("LIFE-DOMAIN-UP", "LIFE-UP-PENDING", "LIFE-UP-IDEMPOTENT");
+
     fc.assert(
       fc.property(fc.constantFrom(...upOkStates), (state) => {
         const result = decideUpAction(state);
@@ -36,6 +39,8 @@ describe("decideUpAction", () => {
   });
 
   it("returns err for shutting-down/terminated/stopping/unknown", () => {
+    traceSpec("LIFE-UP-FAIL");
+
     fc.assert(
       fc.property(fc.constantFrom(...upErrStates), (state) => {
         const result = decideUpAction(state);
@@ -48,6 +53,8 @@ describe("decideUpAction", () => {
 
 describe("decideDownAction", () => {
   it("returns ok with targetState=stopped for stopped/stopping/running", () => {
+    traceSpec("LIFE-DOMAIN-DOWN", "LIFE-DOWN-STOPPING", "LIFE-DOWN-IDEMPOTENT");
+
     fc.assert(
       fc.property(fc.constantFrom(...downOkStates), (state) => {
         const result = decideDownAction(state);
@@ -61,6 +68,8 @@ describe("decideDownAction", () => {
   });
 
   it("returns err for shutting-down/terminated/pending/unknown", () => {
+    traceSpec("LIFE-DOWN-FAIL");
+
     fc.assert(
       fc.property(fc.constantFrom(...downErrStates), (state) => {
         const result = decideDownAction(state);
@@ -80,6 +89,8 @@ describe("waitForEc2TargetState", () => {
   });
 
   it("succeeds when target state appears in trace", async () => {
+    traceSpec("LIFE-POLL-SUCCESS");
+
     await fc.assert(
       fc.asyncProperty(
         fc.array(fc.constantFrom(...ALL_STATES.filter((s) => s !== "running")), {

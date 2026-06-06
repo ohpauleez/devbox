@@ -9,8 +9,9 @@ This spec preserves the repository's convention that canonical identifiers are a
 THE spec-traceability utility SHALL treat a canonical spec identifier as an uppercase kebab-style token matching `[A-Z][A-Z0-9]*(-[A-Z0-9]+)+`, authored inside square brackets in canonical OpenSpec markdown, while traced tests SHALL declare the bare identifier without brackets.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#domain-model`
-- `openspec/changes/spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#domain-model`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#component-design`
 
 #### Scenario: Bracketed identifier is extracted without brackets [TRACE-ID-EXTRACT]
 WHEN an included canonical spec file contains a bracketed identifier such as `[BOX-NULL-REJECT]`, THE spec-traceability utility SHALL extract `BOX-NULL-REJECT` as the canonical identifier value.
@@ -31,8 +32,9 @@ WHEN a traced test declares an identifier through `traceSpec(...)`, THE spec-tra
 THE spec-traceability utility SHALL discover canonical identifiers only from `openspec/specs/**/spec.md` and active `openspec/changes/**/spec.md`, and SHALL exclude `openspec/changes/archive/**` from the canonical catalog.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#scope`
-- `openspec/changes/spec-traceability/proposal.md#constraints`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#scope`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#constraints`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#proposed-design`
 
 #### Scenario: Included spec paths contribute identifiers [TRACE-CATALOG-INCLUDE]
 WHEN a valid bracketed identifier appears in an included non-archived `spec.md` path, THE spec-traceability utility SHALL add that identifier to the canonical catalog.
@@ -48,8 +50,9 @@ WHEN a valid-looking bracketed identifier appears outside the included discovery
 THE spec-traceability utility SHALL ignore bracketed identifier-like tokens that appear inside inline code spans or fenced code blocks while scanning canonical spec files.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#context`
-- `openspec/changes/spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#context`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#quality-attribute-tactics`
 
 #### Scenario: Inline code identifier-looking token is ignored [TRACE-CODE-INLINE]
 WHEN a canonical spec file contains a bracketed identifier-looking token inside an inline code span, THE spec-traceability utility SHALL ignore that token during catalog discovery.
@@ -65,9 +68,10 @@ WHEN a canonical spec file contains a bracketed identifier-looking token inside 
 THE spec-traceability utility SHALL record, for each discovered canonical identifier, the defining file, defining line number, and nearest `Requirement` or `Scenario` heading when available, and SHALL reject duplicate identifiers that are defined in more than one included spec file.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#domain-model`
-- `openspec/changes/spec-traceability/proposal.md#failure-modes`
-- `openspec/changes/spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#domain-model`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#failure-modes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#interaction-protocols`
 
 #### Scenario: Identifier on heading keeps heading provenance [TRACE-PROVENANCE-HEADING]
 WHEN a canonical identifier appears on a `Requirement` or `Scenario` heading, THE spec-traceability utility SHALL retain that heading as provenance context without the bracketed identifier token in the stored heading text.
@@ -88,9 +92,10 @@ WHEN one included spec file repeats the same canonical identifier multiple times
 WHEN a Vitest test calls `traceSpec(...)`, THE spec-traceability utility SHALL require at least one identifier argument, SHALL validate each identifier against the canonical format, and SHALL validate each well-formed identifier against the full canonical catalog.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#scope`
-- `openspec/changes/spec-traceability/proposal.md#quality-attributes`
-- `openspec/changes/spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#scope`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#interface-contracts`
 
 #### Scenario: Empty trace declaration fails declaring test [TRACE-TEST-EMPTY]
 IF a Vitest test calls `traceSpec()` with no identifiers, THEN THE spec-traceability utility SHALL fail the declaring test with an error indicating that at least one identifier is required.
@@ -116,8 +121,9 @@ WHEN the same canonical identifier is declared more than once within one traced 
 THE spec-traceability utility SHALL allow tests without `traceSpec(...)` declarations to execute normally without traceability validation or coverage accounting.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#scope`
-- `openspec/changes/spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#scope`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#system-invariant-tactics`
 
 #### Scenario: Untraced test runs without traceability checks [TRACE-UNTRACED-PASS]
 WHEN a Vitest test does not call `traceSpec(...)`, THE spec-traceability utility SHALL leave that test outside traceability validation and coverage accounting.
@@ -128,8 +134,9 @@ WHEN a Vitest test does not call `traceSpec(...)`, THE spec-traceability utility
 THE spec-traceability utility SHALL validate traced identifiers against the full canonical catalog during ordinary test runs and subset runs.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#constraints`
-- `openspec/changes/spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#constraints`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#interface-contracts`
 
 #### Scenario: Subset run still uses full catalog [TRACE-RUN-SUBSET]
 WHEN a developer runs one test file or a filtered subset of traced tests, THE spec-traceability utility SHALL validate those traced declarations against the full canonical catalog for the repository.
@@ -140,9 +147,10 @@ WHEN a developer runs one test file or a filtered subset of traced tests, THE sp
 WHEN the dedicated `test:trace` command runs as a full-suite command, THE spec-traceability utility SHALL enforce that every canonical identifier is declared by at least one traced test in the run, while ordinary test runs SHALL validate traced references without requiring full coverage.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#motivation`
-- `openspec/changes/spec-traceability/proposal.md#scope`
-- `openspec/changes/spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#motivation`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#scope`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#preconditions-postconditions-and-invariants`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#operational-concerns`
 
 #### Scenario: Ordinary test run validates without coverage enforcement [TRACE-COVERAGE-OFF]
 WHEN the ordinary Vitest test command runs without coverage mode enabled, THE spec-traceability utility SHALL validate traced identifiers but SHALL NOT fail the run for uncovered canonical identifiers.
@@ -163,8 +171,9 @@ WHEN the dedicated full-suite trace coverage command runs against an empty canon
 WHEN the spec-traceability utility reports duplicate canonical identifiers or uncovered canonical identifiers, THE diagnostic SHALL include the identifier together with defining file, defining line number, and nearest heading context when available.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#failure-modes`
-- `openspec/changes/spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#failure-modes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#observability`
 
 #### Scenario: Duplicate identifier diagnostic includes both definitions [TRACE-DIAG-DUPE]
 WHEN duplicate canonical identifiers are discovered across included spec files, THE spec-traceability utility SHALL report both defining files, both defining line numbers, and nearest heading context when available.
@@ -180,8 +189,9 @@ WHEN a full-suite coverage run finds an uncovered canonical identifier, THE spec
 WHEN a requirement is better verified by reasoning, review, or cited documentation than by executable assertions, THE spec-traceability utility SHALL allow that requirement to remain covered by a passing traced test that includes an explanatory comment.
 
 **References:**
-- `openspec/changes/spec-traceability/proposal.md#scope`
-- `openspec/changes/spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#scope`
+- `openspec/changes/archive/2026-06-05-spec-traceability/proposal.md#quality-attributes`
+- `openspec/changes/archive/2026-06-05-spec-traceability/design.md#operational-concerns`
 
 #### Scenario: Review-only traced test satisfies traceability relationship [TRACE-REVIEW-PASS]
 WHEN a traced test documents why an identifier is review-only and passes with a trivial assertion, THE spec-traceability utility SHALL count that traced declaration for validation and coverage purposes.

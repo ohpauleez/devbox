@@ -97,10 +97,37 @@ WHEN the user invokes `connect` or `cp` with `--ssh-user <user>`, THE devbox CLI
 
 **Postcondition:** The invocation override becomes the highest-precedence SSH-user input.
 
+##### Evidence
+- Implementation: [index.ts:86 parseOptionalSshUser()](/src/index.ts#L86), [index.ts:237 dispatch()](/src/index.ts#L237), [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94), [ssh-user.ts:55 resolveSshUser()](/src/domain/ssh-user.ts#L55)
+- Test: [remote-access.contract.test.ts:51 invocation override wins](/test/contract/remote-access.contract.test.ts#L51), [remote-commands.integration.test.ts:98 connect forwards invocation ssh user override to remote-access preconditions](/test/integration/remote-commands.integration.test.ts#L98), [remote-commands.integration.test.ts:189 cp forwards invocation ssh user override to remote-access preconditions](/test/integration/remote-commands.integration.test.ts#L189)
+- Test (property): [ssh-user.property.test.ts:13 invocationOverride takes highest precedence](/test/property/ssh-user.property.test.ts#L13), [ssh-user.property.test.ts:84 rejects invocation override containing embedded control characters](/test/property/ssh-user.property.test.ts#L84)
+- Example:
+```ts
+const { resolveSshUser } = await import("./src/domain/ssh-user.ts");
+const result = resolveSshUser({ invocationOverride: "ubuntu", box: { instanceId: "i-alpha123", sshUser: "ec2-user" }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, sshUser: "defaultuser" } }); //=> type Object
+result.ok; //=> true
+(result.ok ? result.value : ""); //=> ubuntu
+```
+
 #### Scenario: Missing Current Box Rejected [REMOTE-CLI-FAIL]
 IF the user invokes `connect` or `cp` and no current box is selected, THEN THE devbox CLI SHALL fail before any remote-access setup begins.
 
 **Postcondition:** No staging, transport, or `lastConnectAt` update occurs.
+
+##### Evidence
+- Implementation: [context.ts:46 resolveCurrentBox()](/src/domain/context.ts#L46), [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106)
+- Test: [remote-access.contract.test.ts:87 no current -> error](/test/contract/remote-access.contract.test.ts#L87), [remote-access.contract.test.ts:95 current not in boxes -> error](/test/contract/remote-access.contract.test.ts#L95)
+- Example:
+```ts
+const { resolveCurrentBox } = await import("./src/domain/context.ts");
+const config = {
+  boxes: { alpha: { instanceId: "i-alpha123" } },
+  defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } },
+};
+const result = resolveCurrentBox(config); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
 
 ```alloy
 // --- CLI precondition: current box required ---
@@ -161,10 +188,25 @@ WHILE the current instance is `running` and becomes SSM-ready within 2 minutes, 
 
 **Postcondition:** The command may start the staging and transport flow.
 
+##### Evidence
+- Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ec2-wait.ts:186 waitForSsmOnline()](/src/domain/ec2-wait.ts#L186), [ssh-cli.ts:224 ensureSshKeyMaterial()](/src/adapters/ssh-cli.ts#L224), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
+- Test: [remote-access.integration.test.ts:76 continues to staged transport setup when instance is running and SSM-ready](/test/integration/remote-access.integration.test.ts#L76), [ec2-wait.integration.test.ts:109 returns success immediately when getStatus returns Online](/test/integration/ec2-wait.integration.test.ts#L109), [ec2-wait.integration.test.ts:118 returns success after getStatus returns undefined then Online](/test/integration/ec2-wait.integration.test.ts#L118)
+- Example:
+```ts
+const { waitForSsmOnline } = await import("./src/domain/ec2-wait.ts");
+const { ok } = await import("./src/domain/result.ts");
+const result = await waitForSsmOnline(() => Promise.resolve(ok("Online"))); //=> type Object
+result.ok; //=> true
+```
+
 #### Scenario: Non Running Or Unready Rejected [REMOTE-PRECOND-FAIL]
 IF the current instance is not `running` or does not become SSM-ready within 2 minutes, THEN THE devbox domain SHALL fail with `InstanceStateError` or `TimeoutError` before SSH transport begins.
 
 **Postcondition:** No SSH or SCP session is started.
+
+##### Evidence
+- Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ec2-wait.ts:186 waitForSsmOnline()](/src/domain/ec2-wait.ts#L186)
+- Test: [remote-access.integration.test.ts:104 rejects non-running instances before SSM polling or key staging](/test/integration/remote-access.integration.test.ts#L104), [remote-access.integration.test.ts:127 propagates SSM readiness timeout before key staging](/test/integration/remote-access.integration.test.ts#L127), [ec2-wait.integration.test.ts:134 returns timeout error when getStatus never returns Online](/test/integration/ec2-wait.integration.test.ts#L134)
 
 ```alloy
 // --- Precondition checking: running + SSM ready within 2 minutes ---
@@ -334,10 +376,34 @@ WHEN no invocation override or per-box override is present and `defaults.sshUser
 
 **Postcondition:** The remote-access flow has a single resolved SSH user.
 
+##### Evidence
+- Implementation: [ssh-user.ts:55 resolveSshUser()](/src/domain/ssh-user.ts#L55)
+- Test: [remote-access.contract.test.ts:67 defaults used as fallback](/test/contract/remote-access.contract.test.ts#L67)
+- Test (property): [ssh-user.property.test.ts:51 defaults.sshUser used when invocation and box are missing](/test/property/ssh-user.property.test.ts#L51)
+- Example:
+```ts
+const { resolveSshUser } = await import("./src/domain/ssh-user.ts");
+const result = resolveSshUser({ box: { instanceId: "i-alpha123" }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, sshUser: "defaultuser" } }); //=> type Object
+result.ok; //=> true
+(result.ok ? result.value : ""); //=> defaultuser
+```
+
 #### Scenario: Unresolvable SSH User Rejected [REMOTE-SSHUSER-FAIL]
 IF no SSH user can be resolved from invocation override, per-box override, or `defaults.sshUser`, THEN THE devbox domain SHALL fail before temporary key staging begins.
 
 **Postcondition:** No remote access is attempted with an implicit or guessed SSH user.
+
+##### Evidence
+- Implementation: [ssh-user.ts:55 resolveSshUser()](/src/domain/ssh-user.ts#L55), [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106)
+- Test: [remote-access.contract.test.ts:75 missing all three fails](/test/contract/remote-access.contract.test.ts#L75)
+- Test (property): [ssh-user.property.test.ts:69 returns error when all sources are missing](/test/property/ssh-user.property.test.ts#L69)
+- Example:
+```ts
+const { resolveSshUser } = await import("./src/domain/ssh-user.ts");
+const result = resolveSshUser({ box: { instanceId: "i-alpha123" }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } } }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
 
 ```alloy
 // --- SSH user resolution: precedence function ---
@@ -377,10 +443,18 @@ WHEN `connect` completes session startup successfully and the local config commi
 
 **Postcondition:** The tracked box records the last successful remote-access time.
 
+##### Evidence
+- Implementation: [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80), [ssh-cli.ts:402 startInteractiveSsh()](/src/adapters/ssh-cli.ts#L402)
+- Test (integration): [remote-commands.integration.test.ts:76 connect updates lastConnectAt after a successful session](/test/integration/remote-commands.integration.test.ts#L76)
+
 #### Scenario: Connect External Success Local Failure [REMOTE-CONNECT-CONSISTENCY]
 IF `connect` succeeds in starting the remote session but the subsequent config commit fails, THEN THE devbox domain SHALL fail with `ConsistencyError` and report that `lastConnectAt` may be stale locally.
 
 **Postcondition:** Divergence is reported explicitly after external success.
+
+##### Evidence
+- Implementation: [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80)
+- Test (integration): [remote-commands.integration.test.ts:120 connect reports consistency error when commit fails after session success](/test/integration/remote-commands.integration.test.ts#L120)
 
 ```alloy
 // --- Connect session: transport + lastConnectAt update ---
@@ -464,10 +538,18 @@ WHEN `cp` validates the local file and remote path, completes upload to a tempor
 
 **Postcondition:** The final destination path contains the uploaded file and no partial final-path write occurred.
 
+##### Evidence
+- Implementation: [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94), [ssh-cli.ts:461 uploadFileOverScp()](/src/adapters/ssh-cli.ts#L461), [ssh-cli.ts:517 finalizeRemoteFile()](/src/adapters/ssh-cli.ts#L517)
+- Test (integration): [remote-commands.integration.test.ts:168 cp uploads to temp, finalizes, and updates lastConnectAt](/test/integration/remote-commands.integration.test.ts#L168)
+
 #### Scenario: Copy Final Success Local Failure [REMOTE-CP-CONSISTENCY]
 IF `cp` completes remote transfer and finalization successfully but the subsequent local config commit fails, THEN THE devbox domain SHALL fail with `ConsistencyError` and report that the remote file update succeeded while `lastConnectAt` may be stale locally.
 
 **Postcondition:** The command reports cross-system divergence explicitly.
+
+##### Evidence
+- Implementation: [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
+- Test (integration): [remote-commands.integration.test.ts:197 cp reports consistency error when commit fails after remote success](/test/integration/remote-commands.integration.test.ts#L197)
 
 ```alloy
 // --- Copy transport: temp-upload + atomic move ---
@@ -575,10 +657,34 @@ WHEN the remote path is non-empty after trimming and contains no ASCII control c
 
 **Postcondition:** The path is eligible for conservative POSIX quoting and transmission.
 
+##### Evidence
+- Implementation: [remote-path.ts:39 parseRemotePath()](/src/domain/remote-path.ts#L39), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
+- Test: [remote-access.contract.test.ts:9 accepts valid paths](/test/contract/remote-access.contract.test.ts#L9)
+- Test (property): [remote-path.property.test.ts:7 succeeds for non-empty strings without control chars](/test/property/remote-path.property.test.ts#L7)
+- Example:
+```ts
+const { parseRemotePath } = await import("./src/domain/remote-path.ts");
+const result = parseRemotePath("  /home/ec2-user/config.yaml  "); //=> type Object
+result.ok; //=> true
+(result.ok ? result.value : ""); //=> /home/ec2-user/config.yaml
+```
+
 #### Scenario: Unsafe Remote Path Rejected [REMOTE-PATH-FAIL]
 IF the remote path contains an ASCII control character or null byte, THEN THE devbox domain SHALL fail with `ValidationError` before any SSH, SCP, or AWS transport command is executed.
 
 **Postcondition:** The unsafe path never reaches a remote shell.
+
+##### Evidence
+- Implementation: [remote-path.ts:39 parseRemotePath()](/src/domain/remote-path.ts#L39), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
+- Test: [remote-access.contract.test.ts:16 rejects empty](/test/contract/remote-access.contract.test.ts#L16), [remote-access.contract.test.ts:23 rejects whitespace-only](/test/contract/remote-access.contract.test.ts#L23), [remote-access.contract.test.ts:30 rejects control chars](/test/contract/remote-access.contract.test.ts#L30), [remote-access.contract.test.ts:37 rejects null bytes](/test/contract/remote-access.contract.test.ts#L37)
+- Test (property): [remote-path.property.test.ts:26 fails for strings containing control characters](/test/property/remote-path.property.test.ts#L26), [remote-path.property.test.ts:46 fails for empty or whitespace-only strings](/test/property/remote-path.property.test.ts#L46)
+- Example:
+```ts
+const { parseRemotePath } = await import("./src/domain/remote-path.ts");
+const result = parseRemotePath("/home/ec2-user/\u0000config.yaml"); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
 
 ```alloy
 // --- Remote path validation: safety gate ---
@@ -642,6 +748,10 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 
 **Postcondition:** The caller observes the SSH session's actual exit status.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:402 startInteractiveSsh()](/src/adapters/ssh-cli.ts#L402), [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80)
+- Test (integration): [remote-commands.integration.test.ts:106 connect propagates ssh child exit code](/test/integration/remote-commands.integration.test.ts#L106)
+
 ```alloy
 // --- Session lifecycle: exit code propagation ---
 
@@ -670,6 +780,20 @@ WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce a
 WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
 
 **Postcondition:** SCP and network bandwidth are the natural transfer constraints.
+
+##### Evidence
+- Implementation: [ssh-cli.ts:181 validateLocalRegularFile()](/src/adapters/ssh-cli.ts#L181), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
+- Test: [ssh-cli.contract.test.ts:37 accepts regular files regardless of large size](/test/contract/ssh-cli.contract.test.ts#L37)
+- Example:
+```ts
+const { writeFile, unlink } = await import("node:fs/promises");
+const { validateLocalRegularFile } = await import("./src/adapters/ssh-cli.ts");
+const path = "/tmp/devbox-evidence-large-file.bin";
+await writeFile(path, "x");
+const result = await validateLocalRegularFile(path); //=> type Object
+await unlink(path);
+result.ok; //=> true
+```
 
 ```alloy
 // --- File size: no artificial limit ---
@@ -705,10 +829,19 @@ WHEN temporary SSH key staging succeeds, THE devbox adapter SHALL wait for stagi
 
 **Postcondition:** Remote transport starts only after staged authorization is available.
 
+##### Evidence
+- Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
+- Test: [ssh-cli.contract.test.ts:83 stages temporary key via SSM with bounded remote cleanup command](/test/contract/ssh-cli.contract.test.ts#L83)
+- Test (integration): [remote-access.integration.test.ts:76 continues to staged transport setup when instance is running and SSM-ready](/test/integration/remote-access.integration.test.ts#L76)
+
 #### Scenario: Staging Failure Stops Transport [REMOTE-STAGE-FAIL]
 IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `TransportError` and SHALL NOT start SSH or SCP transport.
 
 **Postcondition:** No partially initialized remote transport session is attempted.
+
+##### Evidence
+- Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
+- Test: [ssh-cli.contract.test.ts:101 reports transport error when key staging command fails](/test/contract/ssh-cli.contract.test.ts#L101)
 
 ```alloy
 // --- Key staging: staging must complete before transport ---
@@ -786,10 +919,19 @@ WHEN remote access is staged successfully, THE devbox adapter SHALL remove or sc
 
 **Postcondition:** Temporary authorization does not remain unmanaged indefinitely.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313), [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94), [ssh-cli.ts:567 cleanupLocalTempKeys()](/src/adapters/ssh-cli.ts#L567)
+- Test: [ssh-cli.contract.test.ts:118 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L118)
+- Test (integration): [remote-commands.integration.test.ts:76 connect updates lastConnectAt after a successful session](/test/integration/remote-commands.integration.test.ts#L76), [remote-commands.integration.test.ts:134 connect returns transport error details on local session failure and still cleans up](/test/integration/remote-commands.integration.test.ts#L134), [remote-commands.integration.test.ts:168 cp uploads to temp, finalizes, and updates lastConnectAt](/test/integration/remote-commands.integration.test.ts#L168)
+
 #### Scenario: Cleanup Failure Reported [REMOTE-CLEANUP-FAIL]
 IF best-effort cleanup cannot be completed during a local failure path, THEN THE devbox adapter SHALL still fail the command with transport failure details while preserving the bounded cleanup intent.
 
 **Postcondition:** The caller receives explicit transport failure information instead of silent cleanup loss.
+
+##### Evidence
+- Implementation: [connect.ts:126 runConnectCommand()](/src/cli/commands/connect.ts#L126), [cp.ts:170 runCpCommand()](/src/cli/commands/cp.ts#L170), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
+- Test (integration): [remote-commands.integration.test.ts:152 connect preserves transport error when cleanup also fails](/test/integration/remote-commands.integration.test.ts#L152)
 
 ```alloy
 // --- Temporary key cleanup: bounded lifetime ---
@@ -835,15 +977,27 @@ WHEN `ssh-add -l` reports available keys, THE devbox adapter SHALL use the first
 
 **Postcondition:** No temporary key files are created on disk.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:224 ensureSshKeyMaterial()](/src/adapters/ssh-cli.ts#L224)
+- Test: [ssh-cli.contract.test.ts:49 prefers ssh-agent key material when available](/test/contract/ssh-cli.contract.test.ts#L49)
+
 #### Scenario: Temporary Key Generated And Cleaned [REMOTE-KEY-TEMP]
 WHEN no agent key is available, THE devbox adapter SHALL generate a temporary keypair at `~/.ssh/ssm-ssh-tmp` and remove both files on process exit.
 
 **Postcondition:** Temporary key files are removed when the process exits normally or via trapped signals.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:224 ensureSshKeyMaterial()](/src/adapters/ssh-cli.ts#L224), [ssh-cli.ts:567 cleanupLocalTempKeys()](/src/adapters/ssh-cli.ts#L567)
+- Test: [ssh-cli.contract.test.ts:65 falls back to generated temporary key material when ssh-agent is unavailable](/test/contract/ssh-cli.contract.test.ts#L65), [ssh-cli.contract.test.ts:118 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L118)
+
 #### Scenario: Remote Key Removal Bounded [REMOTE-KEY-REMOTE-CLEANUP]
 WHEN a temporary SSH public key is staged on the remote instance, THE devbox adapter SHALL schedule a background removal job on the remote host that removes the key from `authorized_keys` after 15 seconds.
 
 **Postcondition:** The remote authorized-key entry is removed within 15 seconds regardless of local process behavior.
+
+##### Evidence
+- Implementation: [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
+- Test: [ssh-cli.contract.test.ts:83 stages temporary key via SSM with bounded remote cleanup command](/test/contract/ssh-cli.contract.test.ts#L83)
 
 ```alloy
 // --- Key storage: agent preference and temp-key lifecycle ---

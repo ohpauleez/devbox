@@ -95,6 +95,14 @@ describe("remote command integration", () => {
     expect(cleanupLocalTempKeysMock).toHaveBeenCalledTimes(1);
   });
 
+  it("connect forwards invocation ssh user override to remote-access preconditions", async () => {
+    traceSpec("REMOTE-CLI-CMDS", "REMOTE-CLI-SSHUSER");
+
+    const result = await runConnectCommand("ubuntu");
+    expect(result.ok).toBe(true);
+    expect(resolveRemoteAccessPreconditionsMock).toHaveBeenCalledWith("ubuntu");
+  });
+
   it("connect propagates ssh child exit code", async () => {
     traceSpec("REMOTE-DOMAIN-SESSION", "REMOTE-SESSION-EXIT");
 
@@ -176,6 +184,14 @@ describe("remote command integration", () => {
     expect(finalizeRemoteFileMock).toHaveBeenCalledTimes(1);
     expect(result.value.stdoutLines).toEqual(["/home/ec2-user/remote.txt"]);
     expect(cleanupLocalTempKeysMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cp forwards invocation ssh user override to remote-access preconditions", async () => {
+    traceSpec("REMOTE-CLI-CMDS", "REMOTE-CLI-SSHUSER");
+
+    const result = await runCpCommand("/tmp/local.txt", "/home/ec2-user/remote.txt", "ubuntu");
+    expect(result.ok).toBe(true);
+    expect(resolveRemoteAccessPreconditionsMock).toHaveBeenCalledWith("ubuntu");
   });
 
   it("cp reports consistency error when commit fails after remote success", async () => {

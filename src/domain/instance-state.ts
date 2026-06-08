@@ -30,6 +30,7 @@ export interface UpDecision {
   readonly targetState: "running";
   readonly submitStart: boolean;
   readonly wait: boolean;
+  readonly waitForStoppedBeforeStart: boolean;
 }
 
 /**
@@ -56,7 +57,7 @@ export interface DownDecision {
  * Precondition: `state` is a valid `Ec2InstanceState` value.
  * Postcondition on success: `decision.targetState === "running"`.
  * Failures: `InstanceStateError` when the instance is in a terminal or incompatible state
- * (shutting-down, terminated, stopping, unknown).
+ * (shutting-down, terminated, unknown).
  * Invariant: pure function — no side effects.
  *
  * @example
@@ -75,16 +76,16 @@ export interface DownDecision {
 export function decideUpAction(state: Ec2InstanceState): Result<UpDecision, InstanceStateError> {
   switch (state) {
     case "running":
-      return ok({ targetState: "running", submitStart: false, wait: false });
+      return ok({ targetState: "running", submitStart: false, wait: false, waitForStoppedBeforeStart: false });
     case "pending":
-      return ok({ targetState: "running", submitStart: false, wait: true });
+      return ok({ targetState: "running", submitStart: false, wait: true, waitForStoppedBeforeStart: false });
     case "stopped":
-      return ok({ targetState: "running", submitStart: true, wait: true });
+      return ok({ targetState: "running", submitStart: true, wait: true, waitForStoppedBeforeStart: false });
+    case "stopping":
+      return ok({ targetState: "running", submitStart: false, wait: true, waitForStoppedBeforeStart: true });
     case "shutting-down":
     case "terminated":
       return err(makeTypedError("InstanceStateError", `cannot run up from instance state: ${state}`));
-    case "stopping":
-      return err(makeTypedError("InstanceStateError", "cannot run up while instance is stopping"));
     case "unknown":
       return err(makeTypedError("InstanceStateError", "cannot run up from unknown instance state"));
     default:

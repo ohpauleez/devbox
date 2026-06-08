@@ -40,7 +40,19 @@ describe("decideUpAction", () => {
     }
   });
 
-  it.each(["shutting-down", "terminated", "stopping", "unknown"] as Ec2InstanceState[])(
+  it("stopping -> wait for stop before submit", () => {
+    traceSpec("LIFE-UP-STOPPING");
+
+    const result = decideUpAction("stopping");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.submitStart).toBe(false);
+      expect(result.value.wait).toBe(true);
+      expect(result.value.waitForStoppedBeforeStart).toBe(true);
+    }
+  });
+
+  it.each(["shutting-down", "terminated", "unknown"] as Ec2InstanceState[])(
     "%s -> error",
     (state) => {
       traceSpec("LIFE-UP-FAIL");

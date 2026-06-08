@@ -6,7 +6,7 @@ subtask: true
 
 As indicated by `docs/lfm.md`, auditable evidence and invariants are central to this project's approach to lightweight formal methods.
 
-Update the spec $1 such that each Scenario has a subsection called Evidence (written as `##### Evidence`). If a Scenario already has an Evidence subsection, update and refresh the information.
+Update the spec $1 such that each Scenario has a subsection called Evidence (written as `##### Evidence`) at the end of the Scenario section. If a Scenario already has an Evidence subsection, update and refresh the information.
 
 The Evidence section links each scenario to its implementation, tests, and optionally an executable example that can be mechanically verified by `scripts/evidence.sh`.
 
@@ -81,6 +81,20 @@ lifecycle.currentState(); //=> RUNNING
 IF the current instance state is `shutting-down` or `terminated`, THEN THE devbox domain SHALL fail with `InstanceStateError` and SHALL NOT send a start request.
 
 **Postcondition:** No invalid lifecycle transition is requested.
+
+```alloy
+// --- Up command state machine ---
+
+// Legal starting states for 'up'
+fun up_legal_states : set InstanceState {
+      Stopped + Pending + Running + Stopping
+}
+
+// Illegal starting states for 'up'
+fun up_illegal_states : set InstanceState {
+      ShuttingDown + Terminated
+}
+```
 
 ##### Evidence
 - Implementation: [InstanceLifecycle.java:92 up(InstanceState)](/src/main/java/com/example/devbox/InstanceLifecycle.java#L92)

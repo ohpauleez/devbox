@@ -63,10 +63,26 @@ IF the user invokes `up` or `down` and no current box is selected, THEN THE devb
 
 **Postcondition:** No AWS lifecycle request is sent.
 
+##### Evidence
+- Implementation: [up.ts:82 runUpCommand()](/src/cli/commands/up.ts#L82), [down.ts:73 runDownCommand()](/src/cli/commands/down.ts#L73), [config-store.ts:314 loadConfig()](/src/adapters/config-store.ts#L314), [context.ts:46 resolveCurrentBox()](/src/domain/context.ts#L46)
+- Test (integration): [lifecycle-commands.integration.test.ts:52 up requires current selection](/test/integration/lifecycle-commands.integration.test.ts#L52), [lifecycle-commands.integration.test.ts:68 down requires current selection](/test/integration/lifecycle-commands.integration.test.ts#L68)
+- Example:
+```ts
+const { resolveCurrentBox } = await import("./src/domain/context.ts");
+const config = { boxes: {}, defaults: { tags: { Owner: "devbox", ManagedBy: "devbox" } } };
+const result = resolveCurrentBox(config); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
+
 #### Scenario: Lifecycle Success Prints Instance [LIFE-CLI-SUCCESS]
 WHEN `up` or `down` succeeds, THE devbox CLI SHALL print the targeted instance ID on stdout.
 
 **Postcondition:** Stdout contains a single-line instance identifier.
+
+##### Evidence
+- Implementation: [up.ts:172 runUpCommand()](/src/cli/commands/up.ts#L172), [down.ts:114 runDownCommand()](/src/cli/commands/down.ts#L114)
+- Test (integration): [lifecycle-commands.integration.test.ts:84 up from stopped sends start request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L84), [lifecycle-commands.integration.test.ts:103 up from stopping waits, starts once, and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L103), [lifecycle-commands.integration.test.ts:124 down from running sends stop request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L124)
 
 ```alloy
 // --- Precondition: current box must be selected ---
@@ -113,10 +129,18 @@ WHEN a lifecycle command describes the tracked instance, THE devbox domain SHALL
 
 **Postcondition:** State and existence checks are tied to the active command environment.
 
+##### Evidence
+- Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
+- Test (integration): [lifecycle-commands.integration.test.ts:173 up continues when current instance is describable in active context](/test/integration/lifecycle-commands.integration.test.ts#L173)
+
 #### Scenario: Cross Context Tracking Not Supported [LIFE-SCOPE-FAIL]
 IF a tracked instance is not describable in the active AWS account or region, THEN THE devbox domain SHALL treat the box as stale rather than attempting profile or region discovery.
 
 **Postcondition:** The command does not mutate AWS state through guessed alternate contexts.
+
+##### Evidence
+- Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
+- Test (integration): [lifecycle-commands.integration.test.ts:143 up returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L143), [lifecycle-commands.integration.test.ts:158 down returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L158)
 
 ```alloy
 // --- Active context scoping: describability determines reachability ---
@@ -150,20 +174,51 @@ WHEN the current instance state is `stopped`, THE devbox domain SHALL send a sta
 
 **Postcondition:** The command succeeds only after observing `running` within the timeout bound.
 
+##### Evidence
+- Implementation: [instance-state.ts:76 decideUpAction()](/src/domain/instance-state.ts#L76), [up.ts:153 runUpCommand()](/src/cli/commands/up.ts#L153), [aws-cli.ts:302 startInstance()](/src/adapters/aws-cli.ts#L302), [ec2-wait.ts:118 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L118)
+- Test: [instance-state.contract.test.ts:32 stopped -> submit, wait](/test/contract/instance-state.contract.test.ts#L32)
+- Test (integration): [lifecycle-commands.integration.test.ts:84 up from stopped sends start request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L84)
+- Example:
+```ts
+const { decideUpAction } = await import("./src/domain/instance-state.ts");
+const result = decideUpAction("stopped"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.submitStart; //=> true
+result.ok && result.value.targetState; //=> running
+```
+
 #### Scenario: Stopping Instance Waits Then Starts [LIFE-UP-STOPPING]
 WHEN the current instance state is `stopping`, THE devbox domain SHALL wait for `stopped`, then send a start request and wait for `running`, all within the same 5-minute timeout budget.
 
 **Postcondition:** The command succeeds only after the instance completes its stop transition and then reaches `running`.
+
+##### Evidence
+- Implementation: [instance-state.ts:76 decideUpAction()](/src/domain/instance-state.ts#L76), [up.ts:106 runUpCommand()](/src/cli/commands/up.ts#L106), [aws-cli.ts:302 startInstance()](/src/adapters/aws-cli.ts#L302), [ec2-wait.ts:118 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L118)
+- Test: [instance-state.contract.test.ts:43 stopping -> wait for stop before submit](/test/contract/instance-state.contract.test.ts#L43)
+- Test (integration): [lifecycle-commands.integration.test.ts:103 up from stopping waits, starts once, and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L103)
+- Test (property): [ec2-lifecycle.property.test.ts:26 returns ok with targetState=running for running/pending/stopped/stopping](/test/property/ec2-lifecycle.property.test.ts#L26)
 
 #### Scenario: Invalid Up State Rejected [LIFE-UP-FAIL]
 IF the current instance state is `shutting-down` or `terminated`, THEN THE devbox domain SHALL fail with `InstanceStateError` and SHALL NOT send a start request.
 
 **Postcondition:** No invalid lifecycle transition is requested.
 
+##### Evidence
+- Implementation: [instance-state.ts:86 decideUpAction()](/src/domain/instance-state.ts#L86), [up.ts:101 runUpCommand()](/src/cli/commands/up.ts#L101)
+- Test: [instance-state.contract.test.ts:55 %s -> error](/test/contract/instance-state.contract.test.ts#L55)
+- Test (property): [ec2-lifecycle.property.test.ts:41 returns err for shutting-down/terminated/unknown](/test/property/ec2-lifecycle.property.test.ts#L41)
+- Example:
+```ts
+const { decideUpAction } = await import("./src/domain/instance-state.ts");
+const result = decideUpAction("terminated"); //=> type Object
+result.ok; //=> false
+result.error.category; //=> InstanceStateError
+```
+
 ```alloy
 // --- Up command state machine ---
 
-// Legal starting states for 'up' (issue 3/26: Stopping is legal)
+// Legal starting states for 'up'
 fun up_legal_states : set InstanceState {
   Stopped + Pending + Running + Stopping
 }
@@ -303,10 +358,35 @@ WHEN the current instance state is `running`, THE devbox domain SHALL send a sto
 
 **Postcondition:** The command succeeds only after observing `stopped` within the timeout bound.
 
+##### Evidence
+- Implementation: [instance-state.ts:122 decideDownAction()](/src/domain/instance-state.ts#L122), [down.ts:95 runDownCommand()](/src/cli/commands/down.ts#L95), [aws-cli.ts:354 stopInstance()](/src/adapters/aws-cli.ts#L354), [ec2-wait.ts:118 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L118)
+- Test: [instance-state.contract.test.ts:90 running -> submit, wait](/test/contract/instance-state.contract.test.ts#L90)
+- Test (integration): [lifecycle-commands.integration.test.ts:124 down from running sends stop request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L124)
+- Example:
+```ts
+const { decideDownAction } = await import("./src/domain/instance-state.ts");
+const result = decideDownAction("running"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.submitStop; //=> true
+result.ok && result.value.targetState; //=> stopped
+```
+
 #### Scenario: Invalid Down State Rejected [LIFE-DOWN-FAIL]
 IF the current instance state is `shutting-down` or `terminated`, THEN THE devbox domain SHALL fail with `InstanceStateError` and SHALL NOT send a stop request.
 
 **Postcondition:** No invalid lifecycle transition is requested.
+
+##### Evidence
+- Implementation: [instance-state.ts:130 decideDownAction()](/src/domain/instance-state.ts#L130), [down.ts:90 runDownCommand()](/src/cli/commands/down.ts#L90)
+- Test: [instance-state.contract.test.ts:101 %s -> error](/test/contract/instance-state.contract.test.ts#L101)
+- Test (property): [ec2-lifecycle.property.test.ts:70 returns err for shutting-down/terminated/pending/unknown](/test/property/ec2-lifecycle.property.test.ts#L70)
+- Example:
+```ts
+const { decideDownAction } = await import("./src/domain/instance-state.ts");
+const result = decideDownAction("terminated"); //=> type Object
+result.ok; //=> false
+result.error.category; //=> InstanceStateError
+```
 
 ```alloy
 // --- Down command state machine ---
@@ -423,10 +503,18 @@ IF the current tracked instance cannot be described in the active AWS account an
 
 **Postcondition:** The tracked alias remains present and AWS state is unchanged.
 
+##### Evidence
+- Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
+- Test (integration): [lifecycle-commands.integration.test.ts:143 up returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L143), [lifecycle-commands.integration.test.ts:158 down returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L158)
+
 #### Scenario: Live Instance Continues [LIFE-STALE-PASS]
 WHEN the current tracked instance is describable in the active AWS account and region, THE devbox domain SHALL continue lifecycle evaluation using the returned live state.
 
 **Postcondition:** Lifecycle behavior proceeds from the observed AWS state.
+
+##### Evidence
+- Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
+- Test (integration): [lifecycle-commands.integration.test.ts:173 up continues when current instance is describable in active context](/test/integration/lifecycle-commands.integration.test.ts#L173)
 
 ```alloy
 // --- Stale resource handling ---
@@ -481,35 +569,117 @@ WHEN the target state is observed before the timeout expires, THE devbox adapter
 
 **Postcondition:** The command returns after observing the required target state.
 
+##### Evidence
+- Implementation: [ec2-wait.ts:118 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L118)
+- Test (property): [ec2-lifecycle.property.test.ts:91 succeeds when target state appears in trace](/test/property/ec2-lifecycle.property.test.ts#L91)
+- Example:
+```ts
+const { waitForEc2TargetState } = await import("./src/domain/ec2-wait.ts");
+const { ok } = await import("./src/domain/result.ts");
+const result = await waitForEc2TargetState({ instanceId: "i-demo", expectedState: "running" }, async () => ok({ instanceId: "i-demo", state: "running", instanceType: "t3.micro" })); //=> type Object
+result.ok; //=> true
+result.ok && result.value.lastObservedState; //=> running
+```
+
 #### Scenario: Timeout Reports Last State [LIFE-POLL-TIMEOUT]
 IF the target state is not observed within 5 minutes, THEN THE devbox adapter SHALL fail with `TimeoutError` and include the instance ID, expected state, last observed state, and elapsed time.
 
 **Postcondition:** The timeout is visible to the caller and no false success is reported.
+
+##### Evidence
+- Implementation: [ec2-wait.ts:152 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L152)
+- Test (integration): [ec2-wait.integration.test.ts:54 returns timeout error when describe always returns pending](/test/integration/ec2-wait.integration.test.ts#L54)
+- Example:
+```ts
+const { waitForEc2TargetState } = await import("./src/domain/ec2-wait.ts");
+const { ok } = await import("./src/domain/result.ts");
+const clock = { nowMs: (() => { let now = 0; return () => (now += 5001); })(), isoNow: () => "1970-01-01T00:00:00.000Z" };
+const result = await waitForEc2TargetState({ instanceId: "i-demo", expectedState: "running", timeoutMs: 5000 }, async () => ok({ instanceId: "i-demo", state: "pending", instanceType: "t3.micro" }), clock); //=> type Object
+result.ok; //=> false
+result.error.category; //=> TimeoutError
+```
 
 #### Scenario: Pending Instance Waits Without Resubmit [LIFE-UP-PENDING]
 WHEN the current instance state is `pending`, THE devbox domain SHALL wait for `running` without sending another start request.
 
 **Postcondition:** No redundant start request is submitted and the command succeeds only after observing `running` within the timeout bound.
 
+##### Evidence
+- Implementation: [instance-state.ts:80 decideUpAction()](/src/domain/instance-state.ts#L80), [up.ts:161 runUpCommand()](/src/cli/commands/up.ts#L161)
+- Test: [instance-state.contract.test.ts:21 pending -> no submit, wait](/test/contract/instance-state.contract.test.ts#L21)
+- Test (property): [ec2-lifecycle.property.test.ts:26 returns ok with targetState=running for running/pending/stopped/stopping](/test/property/ec2-lifecycle.property.test.ts#L26)
+- Example:
+```ts
+const { decideUpAction } = await import("./src/domain/instance-state.ts");
+const result = decideUpAction("pending"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.submitStart; //=> false
+result.ok && result.value.wait; //=> true
+```
+
 #### Scenario: Running Instance Succeeds Immediately [LIFE-UP-IDEMPOTENT]
 WHEN the current instance state is already `running`, THE devbox domain SHALL succeed immediately without sending a start request or waiting.
 
 **Postcondition:** The command prints the instance ID and exits with code 0.
+
+##### Evidence
+- Implementation: [instance-state.ts:78 decideUpAction()](/src/domain/instance-state.ts#L78), [up.ts:172 runUpCommand()](/src/cli/commands/up.ts#L172)
+- Test: [instance-state.contract.test.ts:10 running -> no submit, no wait](/test/contract/instance-state.contract.test.ts#L10)
+- Test (property): [ec2-lifecycle.property.test.ts:26 returns ok with targetState=running for running/pending/stopped/stopping](/test/property/ec2-lifecycle.property.test.ts#L26)
+- Test (integration): [lifecycle-commands.integration.test.ts:173 up continues when current instance is describable in active context](/test/integration/lifecycle-commands.integration.test.ts#L173)
+- Example:
+```ts
+const { decideUpAction } = await import("./src/domain/instance-state.ts");
+const result = decideUpAction("running"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.wait; //=> false
+result.ok && result.value.submitStart; //=> false
+```
 
 #### Scenario: Stopping Instance Waits Without Resubmit [LIFE-DOWN-STOPPING]
 WHEN the current instance state is `stopping`, THE devbox domain SHALL wait for `stopped` without sending another stop request.
 
 **Postcondition:** No redundant stop request is submitted and the command succeeds only after observing `stopped` within the timeout bound.
 
+##### Evidence
+- Implementation: [instance-state.ts:126 decideDownAction()](/src/domain/instance-state.ts#L126), [down.ts:103 runDownCommand()](/src/cli/commands/down.ts#L103)
+- Test: [instance-state.contract.test.ts:79 stopping -> no submit, wait](/test/contract/instance-state.contract.test.ts#L79)
+- Test (property): [ec2-lifecycle.property.test.ts:55 returns ok with targetState=stopped for stopped/stopping/running](/test/property/ec2-lifecycle.property.test.ts#L55)
+- Example:
+```ts
+const { decideDownAction } = await import("./src/domain/instance-state.ts");
+const result = decideDownAction("stopping"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.submitStop; //=> false
+result.ok && result.value.wait; //=> true
+```
+
 #### Scenario: Stopped Instance Succeeds Immediately [LIFE-DOWN-IDEMPOTENT]
 WHEN the current instance state is already `stopped`, THE devbox domain SHALL succeed immediately without sending a stop request or waiting.
 
 **Postcondition:** The command prints the instance ID and exits with code 0.
 
+##### Evidence
+- Implementation: [instance-state.ts:124 decideDownAction()](/src/domain/instance-state.ts#L124), [down.ts:114 runDownCommand()](/src/cli/commands/down.ts#L114)
+- Test: [instance-state.contract.test.ts:68 stopped -> no submit, no wait](/test/contract/instance-state.contract.test.ts#L68)
+- Test (property): [ec2-lifecycle.property.test.ts:55 returns ok with targetState=stopped for stopped/stopping/running](/test/property/ec2-lifecycle.property.test.ts#L55)
+- Example:
+```ts
+const { decideDownAction } = await import("./src/domain/instance-state.ts");
+const result = decideDownAction("stopped"); //=> type Object
+result.ok; //=> true
+result.ok && result.value.wait; //=> false
+result.ok && result.value.submitStop; //=> false
+```
+
 #### Scenario: Signal During Polling Aborts [LIFE-POLL-SIGNAL]
 IF SIGINT or SIGTERM is received during EC2 state polling, THEN THE devbox adapter SHALL abort the poll loop immediately without rolling back the already-submitted AWS state transition.
 
 **Postcondition:** The process exits with a non-zero code and does not report false success.
+
+##### Evidence
+- Implementation: [ec2-wait.ts:7 createPollingAbortSignal()](/src/domain/ec2-wait.ts#L7), [ec2-wait.ts:131 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L131)
+- Test (integration): [ec2-wait.integration.test.ts:72 aborts polling promptly when SIGINT is received](/test/integration/ec2-wait.integration.test.ts#L72)
 
 ```alloy
 // --- Bounded polling: tick-based state observation loop ---

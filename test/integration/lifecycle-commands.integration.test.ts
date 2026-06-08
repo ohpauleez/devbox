@@ -100,6 +100,27 @@ describe("lifecycle command integration", () => {
     expect(result.value.stdoutLines).toEqual(["i-alpha123"]);
   });
 
+  it("up from stopping waits, starts once, and prints instance id", async () => {
+    traceSpec("LIFE-CLI-CMDS", "LIFE-CLI-SUCCESS", "LIFE-UP-STOPPING");
+
+    const config = configWithCurrent("alpha", "i-alpha123");
+    await writeFile(join(tmpDir, "devbox.json"), JSON.stringify(config, null, 2) + "\n", "utf8");
+
+    describeInstanceMock
+      .mockResolvedValueOnce(ok({ instanceId: "i-alpha123", state: "stopping", instanceType: "t3.micro" }))
+      .mockResolvedValueOnce(ok({ instanceId: "i-alpha123", state: "stopped", instanceType: "t3.micro" }))
+      .mockResolvedValueOnce(ok({ instanceId: "i-alpha123", state: "running", instanceType: "t3.micro" }));
+
+    const result = await runUpCommand();
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(startInstanceMock).toHaveBeenCalledTimes(1);
+    expect(startInstanceMock).toHaveBeenCalledWith("i-alpha123");
+    expect(result.value.stdoutLines).toEqual(["i-alpha123"]);
+  });
+
   it("down from running sends stop request and prints instance id", async () => {
     traceSpec("LIFE-CLI-CMDS", "LIFE-CLI-SUCCESS", "LIFE-DOWN-STOP");
 

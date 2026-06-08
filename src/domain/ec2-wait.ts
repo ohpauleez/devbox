@@ -70,6 +70,7 @@ export type DescribeSsmStatusFn = () => Promise<Result<"Online" | "ConnectionLos
 export interface WaitEc2TargetInput {
   readonly instanceId: string;
   readonly expectedState: "running" | "stopped";
+  readonly timeoutMs?: number;
 }
 
 /**
@@ -96,7 +97,7 @@ export interface WaitEc2TargetSuccess {
  * @remarks
  * Precondition: `input.instanceId` is non-empty.
  * Postcondition on success: `lastObservedState === input.expectedState`.
- * Bound: polling terminates within `EC2_WAIT_TIMEOUT_MS` (5 minutes).
+ * Bound: polling terminates within `input.timeoutMs ?? EC2_WAIT_TIMEOUT_MS`.
  * Performance: polls every `EC2_POLL_INTERVAL_MS` (5 seconds).
  * Concurrency: not safe for concurrent calls with the same instance — caller must serialize.
  * Ordering: each iteration awaits the previous describe call before sleeping.
@@ -120,12 +121,13 @@ export async function waitForEc2TargetState(
   clock: Clock = REAL_CLOCK,
 ): Promise<Result<WaitEc2TargetSuccess, AwsReadError | TimeoutError>> {
   const startedAtMs = clock.nowMs();
+  const timeoutMs = input.timeoutMs ?? EC2_WAIT_TIMEOUT_MS;
   let lastObservedState: Ec2InstanceState = "unknown";
   const pollingAbort = createPollingAbortSignal();
 
   // Goal: poll until the instance reaches the expected state or time runs out.
   try {
-    while (clock.nowMs() - startedAtMs <= EC2_WAIT_TIMEOUT_MS) {
+    while (clock.nowMs() - startedAtMs <= timeoutMs) {
       if (pollingAbort.signal.aborted) {
         return err(makeTypedError("TimeoutError", `instance polling aborted by signal while waiting for ${input.expectedState}`));
       }
@@ -148,11 +150,11 @@ export async function waitForEc2TargetState(
     }
 
     return err(
-      makeTypedError(
-        "TimeoutError",
-        `instance ${input.instanceId} did not reach ${input.expectedState} within ${Math.floor(EC2_WAIT_TIMEOUT_MS / 1000)}s (last: ${lastObservedState})`,
-      ),
-    );
+        makeTypedError(
+          "TimeoutError",
+          `instance ${input.instanceId} did not reach ${input.expectedState} within ${Math.floor(timeoutMs / 1000)}s (last: ${lastObservedState})`,
+        ),
+      );
   } finally {
     pollingAbort.cleanup();
   }

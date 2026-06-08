@@ -17,14 +17,14 @@ const ALL_STATES: Ec2InstanceState[] = [
   "unknown",
 ];
 
-const upOkStates: Ec2InstanceState[] = ["running", "pending", "stopped"];
-const upErrStates: Ec2InstanceState[] = ["shutting-down", "terminated", "stopping", "unknown"];
+const upOkStates: Ec2InstanceState[] = ["running", "pending", "stopped", "stopping"];
+const upErrStates: Ec2InstanceState[] = ["shutting-down", "terminated", "unknown"];
 const downOkStates: Ec2InstanceState[] = ["stopped", "stopping", "running"];
 const downErrStates: Ec2InstanceState[] = ["shutting-down", "terminated", "pending", "unknown"];
 
 describe("decideUpAction", () => {
-  it("returns ok with targetState=running for running/pending/stopped", () => {
-    traceSpec("LIFE-DOMAIN-UP", "LIFE-UP-PENDING", "LIFE-UP-IDEMPOTENT");
+  it("returns ok with targetState=running for running/pending/stopped/stopping", () => {
+    traceSpec("LIFE-DOMAIN-UP", "LIFE-UP-STOPPING", "LIFE-UP-PENDING", "LIFE-UP-IDEMPOTENT");
 
     fc.assert(
       fc.property(fc.constantFrom(...upOkStates), (state) => {
@@ -38,7 +38,7 @@ describe("decideUpAction", () => {
     );
   });
 
-  it("returns err for shutting-down/terminated/stopping/unknown", () => {
+  it("returns err for shutting-down/terminated/unknown", () => {
     traceSpec("LIFE-DOMAIN-UP", "LIFE-UP-FAIL");
 
     fc.assert(

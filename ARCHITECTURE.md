@@ -16,7 +16,7 @@ The OpenSpec change under `openspec/changes/devbox-core/` is the durable design 
 This project follows a lightweight formal methods approach defined in [`docs/lfm.md`](docs/lfm.md).
 All code adheres to the style guide defined in [`docs/typescript_style.md`](docs/typescript_style.md).
 
-## Bird's-Eye View
+## Overview
 
 At the highest level, `devbox` uses a layered architecture that takes a CLI invocation, resolves local state, optionally queries AWS, and then either prints output or performs a bounded side effect.
 

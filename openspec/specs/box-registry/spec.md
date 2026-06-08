@@ -76,10 +76,18 @@ WHEN the user invokes `devbox` or `devbox list` and the config file is absent, T
 
 **Postcondition:** No config file is created and the command reports no tracked boxes.
 
+##### Evidence
+- Implementation: [list.ts:23 runListCommand()](/src/cli/commands/list.ts#L23), [config-store.ts:314 loadConfig()](/src/adapters/config-store.ts#L314)
+- Test (integration): [command-flows.integration.test.ts:75 list without config file succeeds and does not create config](/test/integration/command-flows.integration.test.ts#L75)
+
 #### Scenario: Missing Alias Rejected [BOX-REGISTRY-CLI-FAIL]
 IF a registry command that requires an existing alias is invoked for an alias not present in local tracking, THEN THE devbox CLI SHALL fail with a normalized error summary and no config mutation.
 
 **Postcondition:** The committed config remains unchanged.
+
+##### Evidence
+- Implementation: [switch.ts:18 runSwitchCommand()](/src/cli/commands/switch.ts#L18), [rm.ts:32 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L32), [rm.ts:82 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L82)
+- Test (integration): [registry-commands.integration.test.ts:126 switch fails for missing alias without mutating current](/test/integration/registry-commands.integration.test.ts#L126)
 
 ```alloy
 // --- List and missing-alias rejection ---
@@ -139,15 +147,27 @@ WHEN the user invokes `devbox -v` or `devbox --version`, THE devbox CLI SHALL pr
 
 **Postcondition:** The process exits after printing version information and no config mutation or AWS interaction occurs.
 
+##### Evidence
+- Implementation: [index.ts:133 parseInvocation()](/src/index.ts#L133), [index.ts:237 dispatch()](/src/index.ts#L237), [output-contracts.ts:49 renderVersion()](/src/domain/output-contracts.ts#L49)
+- Test: [output-contracts.contract.test.ts:11 format is 'devbox X.Y.Z'](/test/contract/output-contracts.contract.test.ts#L11)
+
 #### Scenario: Help Flag Prints Help And Version [BOX-HELP-FLAG]
 WHEN the user invokes `devbox -h` or `devbox --help`, THE devbox CLI SHALL print command overview and help information together with version information and exit successfully without running `list` or any other command.
 
 **Postcondition:** The process exits after printing help and version information and no config mutation or AWS interaction occurs.
 
+##### Evidence
+- Implementation: [index.ts:133 parseInvocation()](/src/index.ts#L133), [index.ts:237 dispatch()](/src/index.ts#L237), [output-contracts.ts:75 renderHelp()](/src/domain/output-contracts.ts#L75)
+- Test: [output-contracts.contract.test.ts:23 includes version](/test/contract/output-contracts.contract.test.ts#L23), [output-contracts.contract.test.ts:29 includes usage section](/test/contract/output-contracts.contract.test.ts#L29), [output-contracts.contract.test.ts:35 lists all commands](/test/contract/output-contracts.contract.test.ts#L35)
+
 #### Scenario: No Args Default To List [BOX-NOARGS-LIST]
 WHEN the user invokes `devbox` with no arguments, THE devbox CLI SHALL behave as `devbox list`.
 
 **Postcondition:** The no-argument invocation follows the documented `list` command contract.
+
+##### Evidence
+- Implementation: [index.ts:133 parseInvocation()](/src/index.ts#L133), [index.ts:237 dispatch()](/src/index.ts#L237), [list.ts:23 runListCommand()](/src/cli/commands/list.ts#L23)
+- Test (integration): [distribution.integration.test.ts:121 no-arg invocation matches list behavior across distribution forms](/test/integration/distribution.integration.test.ts#L121)
 
 ```alloy
 // --- Informational commands: pure output, no side effects ---
@@ -189,10 +209,33 @@ WHEN tracked boxes exist and AWS enrichment succeeds, THE devbox CLI SHALL print
 
 **Postcondition:** The table includes alias, instance ID, instance type, and one of the state values: `running`, `stopped`, `pending`, `stopping`, `shutting-down`, `terminated`, `stale`, or `unknown`.
 
+##### Evidence
+- Implementation: [list.ts:23 runListCommand()](/src/cli/commands/list.ts#L23), [output-contracts.ts:154 renderListTable()](/src/domain/output-contracts.ts#L154)
+- Test: [output-contracts.contract.test.ts:61 header row has right columns](/test/contract/output-contracts.contract.test.ts#L61), [output-contracts.contract.test.ts:71 current indicator is *](/test/contract/output-contracts.contract.test.ts#L71), [output-contracts.contract.test.ts:78 column alignment works (consistent column positions)](/test/contract/output-contracts.contract.test.ts#L78)
+- Example:
+```ts
+const { renderListTable } = await import("./src/domain/output-contracts.ts");
+const output = renderListTable([{ isCurrent: true, alias: "alpha", instanceId: "i-alpha111", instanceType: "t3.micro", state: "running" }, { isCurrent: false, alias: "beta", instanceId: "i-beta222", instanceType: "t3.small", state: "stopped" }]); //=> type Object
+output.stdoutLines[0].includes("alias"); //=> true
+output.stdoutLines[1].startsWith("*"); //=> true
+output.stdoutLines[2].startsWith(" "); //=> true
+```
+
 #### Scenario: Empty Registry Prints Message [BOX-LIST-EMPTY]
 WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes tracked`.
 
 **Postcondition:** No table header or empty table is rendered.
+
+##### Evidence
+- Implementation: [list.ts:29 runListCommand()](/src/cli/commands/list.ts#L29), [output-contracts.ts:118 renderNoBoxesTracked()](/src/domain/output-contracts.ts#L118)
+- Test: [output-contracts.contract.test.ts:45 outputs 'No boxes tracked'](/test/contract/output-contracts.contract.test.ts#L45)
+- Example:
+```ts
+const { renderNoBoxesTracked } = await import("./src/domain/output-contracts.ts");
+const output = renderNoBoxesTracked(); //=> type Object
+output.stdoutLines.length; //=> 1
+output.stdoutLines[0]; //=> No boxes tracked
+```
 
 ```alloy
 // --- List command: read-only enrichment with graceful degradation ---
@@ -237,6 +280,10 @@ WHEN `rm <alias>` succeeds without `--terminate`, THE devbox CLI SHALL emit a wa
 
 **Postcondition:** The user is informed that local removal does not affect AWS resource lifecycle.
 
+##### Evidence
+- Implementation: [rm.ts:32 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L32)
+- Test (integration): [command-flows.integration.test.ts:138 rm local-only removes alias from config](/test/integration/command-flows.integration.test.ts#L138)
+
 - - -
 
 **Domain Layer:** deterministic business rules and state machine.
@@ -255,10 +302,32 @@ WHILE a config contains a `current` value, THE devbox domain SHALL require that 
 
 **Postcondition:** Every committed config either omits `current` or points `current` at an existing alias.
 
+##### Evidence
+- Implementation: [config-schema.ts:234 parseConfig()](/src/domain/config-schema.ts#L234)
+- Test: [config-schema.contract.test.ts:26 accepts a valid config](/test/contract/config-schema.contract.test.ts#L26), [config-schema.contract.test.ts:77 current absent is fine](/test/contract/config-schema.contract.test.ts#L77), [config-schema.contract.test.ts:99 current pointing to existing alias passes](/test/contract/config-schema.contract.test.ts#L99)
+- Example:
+```ts
+const { parseConfig } = await import("./src/domain/config-schema.ts");
+const result = parseConfig({ boxes: { alpha: { instanceId: "i-alpha111" } }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } }, current: "alpha" }); //=> type Object
+result.ok; //=> true
+result.value.current; //=> alpha
+```
+
 #### Scenario: Invalid Current Alias Rejected [BOX-CURRENT-FAIL]
 IF the config contains a `current` alias that does not exist in the tracked box set, THEN THE devbox domain SHALL reject the config as a config failure.
 
 **Postcondition:** No command proceeds using an invalid current alias.
+
+##### Evidence
+- Implementation: [config-schema.ts:262 parseConfig()](/src/domain/config-schema.ts#L262)
+- Test: [config-schema.contract.test.ts:88 current pointing to missing alias rejects](/test/contract/config-schema.contract.test.ts#L88)
+- Example:
+```ts
+const { parseConfig } = await import("./src/domain/config-schema.ts");
+const result = parseConfig({ boxes: { alpha: { instanceId: "i-alpha111" } }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } }, current: "ghost" }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ConfigError
+```
 
 ```alloy
 // --- Core invariant: `current` always references an existing tracked alias ---
@@ -289,10 +358,34 @@ WHEN the user supplies a unique alias that matches the alias rule, THE devbox do
 
 **Postcondition:** Alias validation does not block the command.
 
+##### Evidence
+- Implementation: [alias.ts:35 parseAlias()](/src/domain/alias.ts#L35), [alias.ts:71 ensureAliasAvailable()](/src/domain/alias.ts#L71)
+- Test: [alias.contract.test.ts:12 accepts %s](/test/contract/alias.contract.test.ts#L12), [alias.contract.test.ts:45 passes for new alias](/test/contract/alias.contract.test.ts#L45)
+- Example:
+```ts
+const { parseAlias, ensureAliasAvailable } = await import("./src/domain/alias.ts");
+const parsed = parseAlias("my-box_1"); //=> type Object
+parsed.ok; //=> true
+const available = ensureAliasAvailable(parsed.value, {}); //=> type Object
+available.ok; //=> true
+```
+
 #### Scenario: Duplicate Or Invalid Alias Rejected [BOX-ALIAS-FAIL]
 IF the user supplies an alias that violates the alias rule or is already tracked, THEN THE devbox domain SHALL fail before any AWS mutation or local config mutation begins.
 
 **Postcondition:** The command performs no external side effect.
+
+##### Evidence
+- Implementation: [alias.ts:35 parseAlias()](/src/domain/alias.ts#L35), [alias.ts:71 ensureAliasAvailable()](/src/domain/alias.ts#L71)
+- Test: [alias.contract.test.ts:24 rejects %s](/test/contract/alias.contract.test.ts#L24), [alias.contract.test.ts:52 fails for existing alias](/test/contract/alias.contract.test.ts#L52)
+- Example:
+```ts
+const { parseAlias, ensureAliasAvailable } = await import("./src/domain/alias.ts");
+const invalid = parseAlias("_bad"); //=> type Object
+invalid.ok; //=> false
+const duplicate = ensureAliasAvailable("mybox", { mybox: { instanceId: "i-12345678" } }); //=> type Object
+duplicate.ok; //=> false
+```
 
 ```alloy
 // --- Alias validation: uniqueness within registry ---
@@ -343,10 +436,35 @@ WHEN a mutating command runs without an existing config file, THE devbox domain 
 
 **Postcondition:** The initial config model is valid and contains no fabricated AWS-specific values beyond documented defaults.
 
+##### Evidence
+- Implementation: [config-schema.ts:305 synthesizeFirstRunConfig()](/src/domain/config-schema.ts#L305), [config-store.ts:314 loadConfig()](/src/adapters/config-store.ts#L314)
+- Test: [config-schema.contract.test.ts:108 returns empty boxes](/test/contract/config-schema.contract.test.ts#L108), [config-schema.contract.test.ts:116 has valid defaults with built-in tag defaults](/test/contract/config-schema.contract.test.ts#L116), [config-schema.contract.test.ts:123 has no current](/test/contract/config-schema.contract.test.ts#L123)
+- Test (integration): [config-store.integration.test.ts:44 loadConfig with missing file returns synthesized first-run config](/test/integration/config-store.integration.test.ts#L44)
+- Example:
+```ts
+const { synthesizeFirstRunConfig } = await import("./src/domain/config-schema.ts");
+const config = synthesizeFirstRunConfig(); //=> type Object
+Object.keys(config.boxes).length; //=> 0
+config.current; //=> undefined
+config.defaults.tags.service; //=> devbox
+```
+
 #### Scenario: Invalid Config Rejected [BOX-CONFIG-FAIL]
 IF the existing config does not satisfy the config model, THEN THE devbox domain SHALL fail with a config error before performing any mutation.
 
 **Postcondition:** The prior committed config remains the last trusted state.
+
+##### Evidence
+- Implementation: [config-schema.ts:234 parseConfig()](/src/domain/config-schema.ts#L234), [config-store.ts:314 loadConfig()](/src/adapters/config-store.ts#L314)
+- Test: [config-schema.contract.test.ts:42 rejects missing boxes](/test/contract/config-schema.contract.test.ts#L42), [config-schema.contract.test.ts:50 rejects missing defaults](/test/contract/config-schema.contract.test.ts#L50)
+- Test (integration): [config-store.integration.test.ts:68 loadConfig with invalid JSON returns ConfigError](/test/integration/config-store.integration.test.ts#L68)
+- Example:
+```ts
+const { parseConfig } = await import("./src/domain/config-schema.ts");
+const result = parseConfig({ boxes: {} }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ConfigError
+```
 
 ```alloy
 // --- Config model: well-formedness predicate ---
@@ -398,10 +516,34 @@ WHILE a tracked box contains a per-box `sshUser` and the command does not specif
 
 **Postcondition:** The resolved SSH user matches the tracked box override.
 
+##### Evidence
+- Implementation: [ssh-user.ts:55 resolveSshUser()](/src/domain/ssh-user.ts#L55)
+- Test: [remote-access.contract.test.ts:59 box override wins over defaults](/test/contract/remote-access.contract.test.ts#L59)
+- Test (property): [ssh-user.property.test.ts:32 box.sshUser used when invocationOverride is empty](/test/property/ssh-user.property.test.ts#L32)
+- Example:
+```ts
+const { resolveSshUser } = await import("./src/domain/ssh-user.ts");
+const result = resolveSshUser({ invocationOverride: "", box: { instanceId: "i-alpha111", sshUser: "boxuser" }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, sshUser: "defaultuser" } }); //=> type Object
+result.ok; //=> true
+result.value; //=> boxuser
+```
+
 #### Scenario: Missing SSH User Rejected [BOX-SSHUSER-FAIL]
 IF a remote-access command requires an SSH user and none can be resolved from invocation override, per-box override, or `defaults.sshUser`, THEN THE devbox domain SHALL fail before any remote-access transport begins.
 
 **Postcondition:** No temporary SSH key staging or session startup is attempted.
+
+##### Evidence
+- Implementation: [ssh-user.ts:55 resolveSshUser()](/src/domain/ssh-user.ts#L55), [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106)
+- Test: [remote-access.contract.test.ts:75 missing all three fails](/test/contract/remote-access.contract.test.ts#L75)
+- Test (property): [ssh-user.property.test.ts:69 returns error when all sources are missing](/test/property/ssh-user.property.test.ts#L69)
+- Example:
+```ts
+const { resolveSshUser } = await import("./src/domain/ssh-user.ts");
+const result = resolveSshUser({ box: { instanceId: "i-alpha111" }, defaults: { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" } } }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
 
 ```alloy
 // --- SSH user resolution: precedence model ---
@@ -443,10 +585,18 @@ WHEN the supplied instance ID does not match the advisory EC2 instance-ID regex 
 
 **Postcondition:** The box may be added if the instance is describable.
 
+##### Evidence
+- Implementation: [alias.ts:100 matchesInstanceIdAdvisoryPattern()](/src/domain/alias.ts#L100), [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21)
+- Test (integration): [registry-commands.integration.test.ts:96 add warns for malformed-looking but describable instance ids](/test/integration/registry-commands.integration.test.ts#L96)
+
 #### Scenario: Undescribable Instance Rejected [BOX-INSTANCEID-FAIL]
 IF the supplied instance ID cannot be described in the active account and region, THEN THE devbox domain SHALL fail before adding local tracking.
 
 **Postcondition:** No new alias is committed.
+
+##### Evidence
+- Implementation: [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21)
+- Test (integration): [registry-commands.integration.test.ts:112 add fails when instance is not describable](/test/integration/registry-commands.integration.test.ts#L112)
 
 ```alloy
 // --- Instance ID acceptance: AWS describability is authoritative ---
@@ -481,10 +631,18 @@ WHEN `init` receives a valid alias, a valid template file, required launch value
 
 **Postcondition:** The new alias is tracked locally and selected as current.
 
+##### Evidence
+- Implementation: [init.ts:90 runInitCommand()](/src/cli/commands/init.ts#L90), [init-mapper.ts:208 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L208)
+- Test (integration): [registry-commands.integration.test.ts:138 init success commits launched instance and sets current](/test/integration/registry-commands.integration.test.ts#L138)
+
 #### Scenario: Init External Success Local Failure [BOX-INIT-CONSISTENCY]
 IF `init` successfully launches the AWS instance but the subsequent local config commit fails, THEN THE devbox domain SHALL fail with `ConsistencyError` and report that AWS state changed while local tracking may be stale.
 
 **Postcondition:** The command reports divergence explicitly instead of downgrading it to a plain config failure.
+
+##### Evidence
+- Implementation: [init.ts:151 runInitCommand()](/src/cli/commands/init.ts#L151)
+- Test (integration): [registry-commands.integration.test.ts:160 init reports consistency error when launch succeeds but commit fails](/test/integration/registry-commands.integration.test.ts#L160)
 
 ```alloy
 // --- Init command: launch + track ---
@@ -583,10 +741,18 @@ WHEN `add` validates the alias and confirms that the instance is describable in 
 
 **Postcondition:** The new alias is tracked and selected.
 
+##### Evidence
+- Implementation: [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21)
+- Test (integration): [registry-commands.integration.test.ts:78 add succeeds and sets alias as current](/test/integration/registry-commands.integration.test.ts#L78)
+
 #### Scenario: Add Fails Before Commit [BOX-ADD-FAIL]
 IF `add` cannot validate the alias or cannot confirm the instance in the active account and region, THEN THE devbox domain SHALL fail without mutating local tracking.
 
 **Postcondition:** Existing aliases and `current` remain unchanged.
+
+##### Evidence
+- Implementation: [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21), [alias.ts:35 parseAlias()](/src/domain/alias.ts#L35), [alias.ts:71 ensureAliasAvailable()](/src/domain/alias.ts#L71)
+- Test (integration): [registry-commands.integration.test.ts:112 add fails when instance is not describable](/test/integration/registry-commands.integration.test.ts#L112)
 
 ```alloy
 // --- Add command: track existing instance ---
@@ -647,10 +813,18 @@ WHEN `rm <alias>` is invoked without `--terminate`, THE devbox domain SHALL remo
 
 **Postcondition:** The alias no longer exists in local tracking and no AWS termination is attempted.
 
+##### Evidence
+- Implementation: [rm.ts:32 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L32)
+- Test (integration): [command-flows.integration.test.ts:138 rm local-only removes alias from config](/test/integration/command-flows.integration.test.ts#L138)
+
 #### Scenario: Termination Accepted But Local Commit Fails [BOX-RM-CONSISTENCY]
 IF `rm --terminate` receives accepted termination or already-absent handling from AWS and the subsequent local config commit fails, THEN THE devbox domain SHALL fail with `ConsistencyError` and report that local tracking may still retain the alias.
 
 **Postcondition:** The command exposes divergence between AWS state and local tracking.
+
+##### Evidence
+- Implementation: [rm.ts:82 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L82)
+- Test (integration): [registry-commands.integration.test.ts:183 terminate remove reports consistency error when AWS accepts termination but commit fails](/test/integration/registry-commands.integration.test.ts#L183)
 
 ```alloy
 // --- Remove command: local-only and `EC2 terminate` variants ---
@@ -736,10 +910,18 @@ WHEN the user invokes `switch` for an existing alias, THE devbox domain SHALL co
 
 **Postcondition:** Future current-box commands target the switched alias.
 
+##### Evidence
+- Implementation: [switch.ts:18 runSwitchCommand()](/src/cli/commands/switch.ts#L18)
+- Test (integration): [command-flows.integration.test.ts:125 switch command with valid alias updates current in config](/test/integration/command-flows.integration.test.ts#L125)
+
 #### Scenario: Switch Missing Alias [BOX-SWITCH-FAIL]
 IF the user invokes `switch` for an alias that is not tracked, THEN THE devbox domain SHALL fail without any AWS dependency.
 
 **Postcondition:** The current selection remains unchanged.
+
+##### Evidence
+- Implementation: [switch.ts:18 runSwitchCommand()](/src/cli/commands/switch.ts#L18)
+- Test (integration): [registry-commands.integration.test.ts:126 switch fails for missing alias without mutating current](/test/integration/registry-commands.integration.test.ts#L126)
 
 ```alloy
 // --- Switch command: local pointer update ---
@@ -805,6 +987,10 @@ WHEN `rm <alias>` removes the alias that is also `current`, THE devbox domain SH
 
 **Postcondition:** No automatic reassignment occurs and subsequent current-box commands require explicit `switch`.
 
+##### Evidence
+- Implementation: [rm.ts:47 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L47), [rm.ts:103 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L103)
+- Test (integration): [command-flows.integration.test.ts:156 rm of current alias clears current](/test/integration/command-flows.integration.test.ts#L156)
+
 ```alloy
 // --- Remove clears current: no auto-reassignment ---
 
@@ -838,10 +1024,32 @@ IF the template JSON contains a top-level key not in the accepted allowlist, THE
 
 **Postcondition:** No instance is launched and no config is mutated.
 
+##### Evidence
+- Implementation: [init-mapper.ts:119 validateTemplateShape()](/src/domain/init-mapper.ts#L119), [init-mapper.ts:208 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L208)
+- Test: [init-mapper.contract.test.ts:25 rejects unknown template keys](/test/contract/init-mapper.contract.test.ts#L25)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", { FooBar: 1 }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
+
 #### Scenario: InstanceRequirements Rejected [BOX-INIT-REJECT-IR]
 IF the template JSON contains `InstanceRequirements`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
 
 **Postcondition:** No instance is launched and no config is mutated.
+
+##### Evidence
+- Implementation: [init-mapper.ts:119 validateTemplateShape()](/src/domain/init-mapper.ts#L119)
+- Test: [init-mapper.contract.test.ts:33 rejects InstanceRequirements key](/test/contract/init-mapper.contract.test.ts#L33)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", { InstanceRequirements: {} }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.ok; //=> false
+result.error.message.includes("InstanceRequirements"); //=> true
+```
 
 ### Requirement: Init Conditional Conflict Rules [BOX-DOMAIN-INIT-CONFLICTS]
 WHEN `init` processes template JSON that contains `NetworkInterfaces`, THE devbox domain SHALL reject top-level `SecurityGroupIds` and top-level `SecurityGroups` with `ValidationError`, and SHALL require security groups under `NetworkInterfaces[*].Groups`.
@@ -858,10 +1066,32 @@ IF the template contains both `NetworkInterfaces` and top-level `SecurityGroupId
 
 **Postcondition:** No instance is launched and no config is mutated.
 
+##### Evidence
+- Implementation: [init-mapper.ts:119 validateTemplateShape()](/src/domain/init-mapper.ts#L119)
+- Test: [init-mapper.contract.test.ts:41 rejects NetworkInterfaces + SecurityGroupIds conflict](/test/contract/init-mapper.contract.test.ts#L41)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", { NetworkInterfaces: [], SecurityGroupIds: ["sg-1"] }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ValidationError
+```
+
 #### Scenario: SecurityGroups Without NetworkInterfaces Allowed [BOX-INIT-SG-ALLOWED]
 WHEN the template uses top-level `SecurityGroups` without `NetworkInterfaces`, THE devbox domain SHALL pass the request through and relay any AWS rejection clearly.
 
 **Postcondition:** AWS is authoritative for whether the request shape is valid in the active context.
+
+##### Evidence
+- Implementation: [init-mapper.ts:119 validateTemplateShape()](/src/domain/init-mapper.ts#L119), [init-mapper.ts:208 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L208)
+- Test: [init-mapper.contract.test.ts:111 allows top-level SecurityGroups when NetworkInterfaces is absent](/test/contract/init-mapper.contract.test.ts#L111)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", { SecurityGroups: ["default"] }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.ok; //=> true
+result.value.payload.SecurityGroups[0]; //=> default
+```
 
 ```alloy
 // --- Template validation: structural constraints on init input ---
@@ -914,6 +1144,17 @@ IF any required tag has an empty or disallowed value after merge, THEN THE devbo
 
 **Postcondition:** No instance is launched with invalid tag values.
 
+##### Evidence
+- Implementation: [tags.ts:53 validateRequiredTags()](/src/domain/tags.ts#L53), [init-mapper.ts:142 parseMergedRequiredTags()](/src/domain/init-mapper.ts#L142)
+- Test: [tags.contract.test.ts:25 rejects invalid env](/test/contract/tags.contract.test.ts#L25), [tags.contract.test.ts:32 rejects bad version length (too short)](/test/contract/tags.contract.test.ts#L32), [tags.contract.test.ts:39 rejects bad version length (too long)](/test/contract/tags.contract.test.ts#L39), [tags.contract.test.ts:46 rejects bad customer-data](/test/contract/tags.contract.test.ts#L46)
+- Example:
+```ts
+const { validateRequiredTags } = await import("./src/domain/tags.ts");
+const result = validateRequiredTags({ env: "production", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }); //=> type Object
+result.ok; //=> false
+result.error.category; //=> ConfigError
+```
+
 ### Requirement: Tag Merge Precedence [BOX-DOMAIN-TAGS-MERGE]
 WHEN `init` builds AWS instance tags, THE devbox domain SHALL apply this precedence order:
 
@@ -939,10 +1180,34 @@ WHEN the template includes a `Name` tag in its instance `TagSpecification`, THE 
 
 **Postcondition:** The launched instance `Name` tag equals the alias regardless of template content.
 
+##### Evidence
+- Implementation: [init-mapper.ts:237 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L237)
+- Test: [tags.contract.test.ts:74 Name tag is always forced to alias value regardless of template tags](/test/contract/tags.contract.test.ts#L74)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("myalias", { TagSpecifications: [{ ResourceType: "instance", Tags: [{ Key: "Name", Value: "wrong" }] }] }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+const instanceSpec = result.value.payload.TagSpecifications.find((spec) => spec.ResourceType === "instance"); //=> type Object
+const nameTag = instanceSpec.Tags.find((tag) => tag.Key === "Name"); //=> type Object
+nameTag.Value; //=> myalias
+```
+
 #### Scenario: Non Instance TagSpecs Preserved [BOX-TAGS-NONINSTANCE]
 WHEN the template includes `TagSpecifications` for non-instance resource types, THE devbox domain SHALL pass them through unchanged.
 
 **Postcondition:** Volume or other resource-type tags from the template are not lost or merged into the instance tags.
+
+##### Evidence
+- Implementation: [init-mapper.ts:103 preserveNonInstanceTagSpecs()](/src/domain/init-mapper.ts#L103), [init-mapper.ts:255 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L255)
+- Test: [init-mapper.contract.test.ts:123 preserves non-instance TagSpecifications unchanged](/test/contract/init-mapper.contract.test.ts#L123)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("mybox", { TagSpecifications: [{ ResourceType: "volume", Tags: [{ Key: "Backup", Value: "true" }] }] }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+const volumeSpec = result.value.payload.TagSpecifications.find((spec) => spec.ResourceType === "volume"); //=> type Object
+volumeSpec.Tags[0].Key; //=> Backup
+volumeSpec.Tags[0].Value; //=> true
+```
 
 ```alloy
 // --- Tag merge: precedence model ---
@@ -993,6 +1258,16 @@ WHEN the template `UserData` value begins with `file:`, THE devbox domain SHALL 
 
 **Postcondition:** The AWS CLI receives the exact `UserData` string from the template without transformation.
 
+##### Evidence
+- Implementation: [init-mapper.ts:265 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L265)
+- Test: [init-mapper.contract.test.ts:90 UserData pass-through without transformation](/test/contract/init-mapper.contract.test.ts#L90)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", { UserData: "file:setup.sh" }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.value.payload.UserData; //=> file:setup.sh
+```
+
 ```alloy
 // --- UserData pass-through: identity preservation ---
 // UserData is modeled as an opaque value that must be preserved exactly.
@@ -1032,10 +1307,32 @@ IF neither the template nor config defaults supply `ImageId`, THEN THE devbox do
 
 **Postcondition:** No instance is launched with a missing AMI.
 
+##### Evidence
+- Implementation: [init-mapper.ts:223 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L223)
+- Test: [init-mapper.contract.test.ts:65 requires ImageId from either source](/test/contract/init-mapper.contract.test.ts#L65)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", {}, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
+result.ok; //=> false
+result.error.message.includes("ImageId"); //=> true
+```
+
 #### Scenario: Init Fails Without IamInstanceProfile After Merge [BOX-CONFIG-MISSING-IAM]
 IF neither the template nor config defaults supply `IamInstanceProfile`, THEN THE devbox domain SHALL fail with `ValidationError` before any AWS call.
 
 **Postcondition:** No instance is launched without an instance profile.
+
+##### Evidence
+- Implementation: [init-mapper.ts:225 mapInitTemplateToRunInstances()](/src/domain/init-mapper.ts#L225)
+- Test: [init-mapper.contract.test.ts:81 requires IamInstanceProfile from either source](/test/contract/init-mapper.contract.test.ts#L81)
+- Example:
+```ts
+const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper.ts");
+const result = mapInitTemplateToRunInstances("box", {}, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default" }); //=> type Object
+result.ok; //=> false
+result.error.message.includes("IamInstanceProfile"); //=> true
+```
 
 ```alloy
 // --- Config creation policy: required launch values ---
@@ -1073,10 +1370,18 @@ WHEN all tracked instance IDs fit within a single AWS CLI call, THE devbox domai
 
 **Postcondition:** API call count is minimized to reduce throttling risk.
 
+##### Evidence
+- Implementation: [list.ts:34 runListCommand()](/src/cli/commands/list.ts#L34)
+- Test (integration): [command-flows.integration.test.ts:89 list enriches all tracked boxes with one batch describe call](/test/integration/command-flows.integration.test.ts#L89)
+
 #### Scenario: AWS Unavailable Degrades Gracefully [BOX-LIST-BATCH-UNAVAIL]
 WHEN the enrichment batch fails because AWS is unreachable or the `aws` executable is absent, THE devbox CLI SHALL still succeed and render all rows with state `unknown`.
 
 **Postcondition:** Local tracking visibility is never lost due to AWS enrichment failure.
+
+##### Evidence
+- Implementation: [list.ts:39 runListCommand()](/src/cli/commands/list.ts#L39)
+- Test (integration): [command-flows.integration.test.ts:108 list degrades gracefully to unknown state when AWS enrichment fails](/test/integration/command-flows.integration.test.ts#L108)
 
 ```alloy
 // --- List graceful degradation ---
@@ -1111,10 +1416,18 @@ WHEN the adapter acquires the advisory lock and completes the write flow success
 
 **Postcondition:** The target config path contains the full next config and no partial JSON.
 
+##### Evidence
+- Implementation: [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206), [config-store.ts:368 commitConfig()](/src/adapters/config-store.ts#L368)
+- Test (integration): [config-store.integration.test.ts:118 commitConfig acquires lock and releases it after completion](/test/integration/config-store.integration.test.ts#L118)
+
 #### Scenario: Live Lock Rejected [BOX-ATOMIC-FAIL]
 IF the advisory lock is held by a live, recent process and is not stale, THEN THE devbox adapter SHALL reject the mutation with a config failure instead of merging concurrent writers.
 
 **Postcondition:** The previously committed config remains unchanged.
+
+##### Evidence
+- Implementation: [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
+- Test (integration): [config-store.integration.test.ts:134 concurrent commitConfig with active lock returns lock-held error](/test/integration/config-store.integration.test.ts#L134)
 
 ```alloy
 // --- Atomic config mutation: single-writer lock protocol ---
@@ -1198,6 +1511,10 @@ WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE 
 
 **Postcondition:** The config file is readable by the owner and group/others.
 
+##### Evidence
+- Implementation: [config-store.ts:52 CONFIG_FILE_MODE](/src/adapters/config-store.ts#L52), [config-store.ts:368 commitConfig()](/src/adapters/config-store.ts#L368)
+- Test (integration): [config-store.integration.test.ts:90 commitConfig creates config file with owner-only permissions](/test/integration/config-store.integration.test.ts#L90)
+
 ### Requirement: Stale Lock Specification [BOX-ADAPTER-STALELOCK]
 WHEN the advisory lock file exists and the current process needs to acquire it, THE devbox adapter SHALL detect staleness using PID validity, PID liveness, and a 5-minute mtime threshold.
 
@@ -1212,15 +1529,27 @@ WHEN the lock file contains a PID that does not correspond to a running process,
 
 **Postcondition:** The stale lock does not permanently block the mutation.
 
+##### Evidence
+- Implementation: [config-store.ts:103 parsePid()](/src/adapters/config-store.ts#L103), [config-store.ts:115 isProcessAlive()](/src/adapters/config-store.ts#L115), [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
+- Test (integration): [config-store.integration.test.ts:147 stale lock recovery: lock with non-existent PID allows commitConfig to succeed](/test/integration/config-store.integration.test.ts#L147)
+
 #### Scenario: Stale Lock By Age [BOX-STALELOCK-AGE]
 WHEN the lock file mtime is older than 5 minutes, THE devbox adapter SHALL treat the lock as stale regardless of PID liveness.
 
 **Postcondition:** Long-orphaned locks are recovered automatically.
 
+##### Evidence
+- Implementation: [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
+- Test (integration): [config-store.integration.test.ts:161 stale lock recovery: old lock mtime is treated as stale](/test/integration/config-store.integration.test.ts#L161)
+
 #### Scenario: Live Lock Not Stolen [BOX-STALELOCK-LIVE]
 WHEN the lock file contains a valid PID of a running process and the mtime is within 5 minutes, THE devbox adapter SHALL reject the mutation with `ConfigError`.
 
 **Postcondition:** A live, recent lock holder is never preempted.
+
+##### Evidence
+- Implementation: [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
+- Test (integration): [config-store.integration.test.ts:134 concurrent commitConfig with active lock returns lock-held error](/test/integration/config-store.integration.test.ts#L134)
 
 ```alloy
 // --- Stale lock recovery protocol ---

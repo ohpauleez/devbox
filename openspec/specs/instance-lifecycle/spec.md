@@ -9,8 +9,9 @@ This spec captures the explicit lifecycle state machines, stale-resource handlin
 
 ```alloy
 module InstanceLifecycle
+open util/boolean
 
-// --- Signatures: EC2 instance state machine vocabulary ---
+// --- EC2 instance state machine vocabulary ---
 
 abstract sig InstanceState {}
 one sig Stopped, Pending, Running, Stopping, ShuttingDown, Terminated extends InstanceState {}
@@ -20,16 +21,13 @@ sig Instance {
   var describable : one Bool   // whether the instance is visible in active AWS context
 }
 
-abstract sig Bool {}
-one sig True, False extends Bool {}
-
 // Tracked box selection
 var sig current in Instance {}
 
 // --- Command and result vocabulary ---
-
-abstract sig CmdKind {}
-one sig UpCmd, DownCmd extends CmdKind {}
+// Note: Specifically not using `enum` here that there is no implied `ordering`
+abstract sig Cmd {}
+one sig UpCmd, DownCmd extends Cmd {}
 
 abstract sig Outcome {}
 one sig Success, InstanceStateError, NotFoundError, TimeoutError, Aborted extends Outcome {}
@@ -48,6 +46,8 @@ one sig PollState {
 ```
 
 ## Requirements
+
+**CLI Layer:** command surface, parsing, output, and composition of domain+adapters.
 
 ### Requirement: CLI Lifecycle Commands [LIFE-CLI-CMDS]
 THE devbox CLI SHALL provide `up` and `down` commands that operate on the current tracked box.
@@ -75,7 +75,7 @@ pred no_current_box {
   no current
 }
 
-pred lifecycle_rejected_no_current [c : CmdKind] {
+pred lifecycle_rejected_no_current [c : Cmd] {
   // Guard: no current box selected
   no_current_box
   // Effect: command fails, no AWS request, no state change
@@ -94,6 +94,10 @@ assert no_aws_request_without_current {
   always (no_current_box implies PollState.startRequested' = False)
 }
 ```
+
+- - -
+
+**Domain Layer:** deterministic business rules and state machine.
 
 ### Requirement: Active Context Scoping [LIFE-DOMAIN-SCOPE]
 THE devbox domain SHALL evaluate tracked instance state against only the active AWS account and region at command time.
@@ -459,6 +463,10 @@ assert stale_preserves_tracking {
 }
 ```
 
+- - -
+
+**Adapter Layer:** filesystem/AWS/process boundary mechanics.
+
 ### Requirement: Bounded Polling [LIFE-ADAPTER-POLL]
 WHEN `up` or `down` waits for a target state, THE devbox adapter SHALL poll EC2 state every 5 seconds for no longer than 5 minutes.
 
@@ -620,7 +628,7 @@ assert no_false_success {
 }
 
 // Safety: polling always terminates (bounded by tick countdown)
-// Issue 1 fix: requires fairness — polling events must eventually fire when enabled.
+// Requires fairness — polling events must eventually fire when enabled.
 // Without fairness, infinite stutter is a valid trace that keeps active=True forever.
 pred polling_fairness {
   always (
@@ -653,13 +661,13 @@ assert signal_abort_no_success {
 }
 
 // Liveness: if EC2 eventually reaches target, success is eventually reported
-// Issue 16 fix: standard leads-to formulation instead of always-eventually-implies
+// Standard `leads-to` formulation instead of always-eventually-implies
 pred ec2_fairness [i : Instance] {
   always (i.state = Pending implies eventually i.state = Running)
   always (i.state = Stopping implies eventually i.state = Stopped)
 }
 
-// Issue 2 fix: wrapped in always with existence guard to avoid vacuous truth at init
+// The core condition is wrapped in always with existence guard to avoid vacuous truth at init
 assert liveness_target_reached {
   (polling_fairness and (all i : Instance | ec2_fairness[i])) implies
     always (
@@ -667,6 +675,8 @@ assert liveness_target_reached {
         implies eventually (PollState.lastOutcome = Success or PollState.lastOutcome = TimeoutError or PollState.lastOutcome = Aborted))
 }
 ```
+
+### State machine and invariant checks
 
 ```alloy
 // --- Environment event: current box selection ---
@@ -711,8 +721,6 @@ pred stutter {
   all i : Instance | i.state' = i.state and i.describable' = i.describable
 }
 
-// Issue 4 fix: removed vacuous `some i` quantification around lifecycle_rejected_no_current
-// Issue 5 fix: added env_select_current to make current reachable from init
 fact transitions {
   init and always (
     (some i : Instance | env_select_current[i])
@@ -732,7 +740,7 @@ fact transitions {
 
 run show_instance_lifecycle {} for 2 Instance, 8 Int, 5 steps
 
-// Issue 5 fix: scenario is satisfiable — uses eventually to find a valid trace
+// This scenario has been adjusted to be satisfiable — uses eventually to find a valid trace
 // through init -> env_select_current -> up_from_stopped -> poll_tick -> success
 run scenario_up_from_stopped {
   eventually (some i : Instance |

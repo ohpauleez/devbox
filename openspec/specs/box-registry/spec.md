@@ -9,17 +9,17 @@ This spec also captures the registry-side invariants and safety rules, including
 
 ```alloy
 module BoxRegistry
+open util/boolean
 
-// --- Signatures: Registry domain vocabulary ---
+// --- Registry domain vocabulary ---
 
-sig Alias {}
-sig InstanceId {}
+sig Alias {}      // An alias is the local `devbox` name a user assigns to an EC2 machine
+sig InstanceId {} // An instanceId is the AWS EC2 Instance Id.
 
 // SSH user sources at different precedence levels
 sig SshUser {}
 
 // Config model: the durable local state
-// Issue 23 fix: added hasLastConnectAt per BOX-DOMAIN-CONFIG requirement
 one sig Config {
   var boxes : Alias -> lone InstanceId,      // tracked alias -> instance mapping
   var current : lone Alias,                  // optional current selection
@@ -29,7 +29,7 @@ one sig Config {
 }
 
 // Lock state for atomic config mutation
-// Issue 17: Commands atomically acquire and release the lock in a single transition.
+// Commands atomically acquire and release the lock in a single transition.
 // External processes may hold the lock (modeled via external_lock_acquired), which
 // blocks our commands until recovery or release.
 abstract sig LockState {}
@@ -40,10 +40,8 @@ one sig LockModel {
   var lockHolderAlive : one Bool
 }
 
-abstract sig Bool {}
-one sig True, False extends Bool {}
-
-// AWS describability of an instance
+// A user can have different AWS contexts (profiles, regions, etc.)
+// AWS can `describe` an instance; eg: What instances are really alive on AWS, for this specific AwsContext
 sig AwsContext {
   describable : set InstanceId
 }
@@ -61,6 +59,8 @@ one sig CommandState {
 ```
 
 ## Requirements
+
+**CLI Layer:** command surface, parsing, output, and composition of domain+adapters.
 
 ### Requirement: CLI Registry Commands [BOX-CLI-REGISTRY]
 THE devbox CLI SHALL provide local box-registry commands for `list`, `init <alias> <template-file>`, `add <instance-id> <alias>`, `rm <alias> [--terminate]`, and `switch <alias>`.
@@ -118,7 +118,7 @@ pred missing_alias_rejected [a : Alias] {
   LockModel.lockHolderAlive' = LockModel.lockHolderAlive
 }
 
-// Issue 6 fix: scoped to the event predicate rather than all untracked aliases globally
+// Scoped to the event predicate rather than all untracked aliases globally
 assert missing_alias_no_mutation {
   always (all a : Alias |
     missing_alias_rejected[a] implies Config.boxes' = Config.boxes)
@@ -175,6 +175,72 @@ assert informational_no_side_effects {
 }
 ```
 
+### Requirement: List Output Format [BOX-CLI-LIST-FORMAT]
+WHEN `devbox list` prints tracked boxes, THE devbox CLI SHALL render a human-readable terminal table with columns: current-box indicator, alias, instance ID, instance type, and state.
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Table With Current Indicator [BOX-LIST-TABLE]
+WHEN tracked boxes exist and AWS enrichment succeeds, THE devbox CLI SHALL print a table where the current box row is marked with `*` in the first column and other rows show a space.
+
+**Postcondition:** The table includes alias, instance ID, instance type, and one of the state values: `running`, `stopped`, `pending`, `stopping`, `shutting-down`, `terminated`, `stale`, or `unknown`.
+
+#### Scenario: Empty Registry Prints Message [BOX-LIST-EMPTY]
+WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes tracked`.
+
+**Postcondition:** No table header or empty table is rendered.
+
+```alloy
+// --- List command: read-only enrichment with graceful degradation ---
+
+// List enrichment states for each tracked box
+abstract sig EnrichState {}
+one sig Enriched, Stale, Unknown extends EnrichState {}
+
+pred list_command {
+  // List is always read-only: no config mutation
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = CmdSuccess
+  CommandState.awsMutated' = False
+  CommandState.configMutated' = False
+  LockModel.lockState' = LockModel.lockState
+  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
+}
+
+// Safety: list never mutates config regardless of AWS availability
+assert list_never_mutates {
+  always (list_command implies (
+    Config.boxes' = Config.boxes and
+    Config.current' = Config.current and
+    CommandState.awsMutated' = False))
+}
+```
+
+### Requirement: Remove Without Terminate Warning [BOX-DOMAIN-RM-WARN]
+WHEN `rm <alias>` is invoked without `--terminate`, THE devbox CLI SHALL print a warning that the AWS resources associated with the removed alias may still exist.
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Local Remove Warns About AWS Resources [BOX-RM-WARN-MSG]
+WHEN `rm <alias>` succeeds without `--terminate`, THE devbox CLI SHALL emit a warning to stderr indicating that the tracked instance may still be running in AWS.
+
+**Postcondition:** The user is informed that local removal does not affect AWS resource lifecycle.
+
+- - -
+
+**Domain Layer:** deterministic business rules and state machine.
+
 ### Requirement: Local Registry State [BOX-DOMAIN-STATE]
 THE devbox domain SHALL treat the local config as the source of truth for tracked aliases and current-box selection.
 
@@ -195,7 +261,7 @@ IF the config contains a `current` alias that does not exist in the tracked box 
 **Postcondition:** No command proceeds using an invalid current alias.
 
 ```alloy
-// --- Core invariant: current always references an existing tracked alias ---
+// --- Core invariant: `current` always references an existing tracked alias ---
 
 // This is the fundamental registry integrity invariant.
 // It must hold in every reachable state after init.
@@ -231,7 +297,7 @@ IF the user supplies an alias that violates the alias rule or is already tracked
 ```alloy
 // --- Alias validation: uniqueness within registry ---
 // Note: Regex syntax validation is a domain rule not expressible in Alloy's
-// relational logic; we model the abstract property that aliases are valid tokens.
+// relational logic; the abstract property is modeled such that aliases are valid tokens.
 // Uniqueness IS expressible and is modeled here.
 
 pred alias_available [a : Alias] {
@@ -254,7 +320,7 @@ assert no_duplicate_alias {
     lone Config.boxes[a])
 }
 
-// Issue 7 fix: scoped to the add_fails event rather than all tracked aliases
+// Scoped to the add_fails event rather than all tracked aliases
 assert alias_reject_no_side_effect {
   always (all a : Alias, iid : InstanceId |
     add_fails[a, iid] implies (
@@ -286,9 +352,9 @@ IF the existing config does not satisfy the config model, THEN THE devbox domain
 // --- Config model: well-formedness predicate ---
 
 pred config_wellformed {
-  // current, if present, must reference a tracked alias
+  // `current`, if present, must reference a tracked alias
   current_integrity
-  // boxes is a partial function: each alias has at most one instanceId
+  // `boxes` is a partial function: each alias has at most one instanceId
   all a : Alias | lone Config.boxes[a]
   // boxSshUser only defined for tracked aliases
   Config.boxSshUser.SshUser in Config.boxes.InstanceId
@@ -340,11 +406,11 @@ IF a remote-access command requires an SSH user and none can be resolved from in
 ```alloy
 // --- SSH user resolution: precedence model ---
 
-// Resolution function: invocation > per-box > defaults
+// SSH Config/User resolution function: invocation > per-box > defaults
 fun resolve_ssh_user [invocationOverride : lone SshUser, box : Alias] : lone SshUser {
   // Highest precedence: invocation override
   (some invocationOverride) implies invocationOverride
-  // Middle: per-box override
+  // Next: per-box override
   else (some Config.boxSshUser[box]) implies Config.boxSshUser[box]
   // Lowest: defaults
   else Config.defaultSshUser
@@ -422,7 +488,7 @@ IF `init` successfully launches the AWS instance but the subsequent local config
 
 ```alloy
 // --- Init command: launch + track ---
-// Issue 20 fix: Template parameter connects template validation to init events
+// Note: The template parameter connects template validation to init events
 
 pred init_success [a : Alias, iid : InstanceId, t : Template] {
   // Preconditions
@@ -469,7 +535,7 @@ pred init_consistency_error [a : Alias, iid : InstanceId, t : Template] {
   LockModel.lockHolderAlive' = LockModel.lockHolderAlive
 }
 
-// Issue 20 fix: template validation failure event (connected to transitions)
+// Template validation failure event (connected to state transitions)
 pred init_template_rejected [a : Alias, t : Template] {
   alias_available[a]
   config_wellformed
@@ -587,7 +653,7 @@ IF `rm --terminate` receives accepted termination or already-absent handling fro
 **Postcondition:** The command exposes divergence between AWS state and local tracking.
 
 ```alloy
-// --- Remove command: local-only and terminate variants ---
+// --- Remove command: local-only and `EC2 terminate` variants ---
 
 pred rm_local [a : Alias] {
   // Preconditions
@@ -725,262 +791,6 @@ assert switch_no_aws {
 }
 ```
 
-### Requirement: Atomic Config Mutation [BOX-ADAPTER-ATOMIC]
-WHEN a mutating registry command commits config state, THE devbox adapter SHALL use single-writer advisory locking, temp-file write, `fsync`, atomic replace, and best-effort stale-lock recovery.
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
-
-#### Scenario: Successful Atomic Replace [BOX-ATOMIC-SUCCESS]
-WHEN the adapter acquires the advisory lock and completes the write flow successfully, THE devbox adapter SHALL leave a schema-valid committed config and remove the lock file on normal completion.
-
-**Postcondition:** The target config path contains the full next config and no partial JSON.
-
-#### Scenario: Live Lock Rejected [BOX-ATOMIC-FAIL]
-IF the advisory lock is held by a live, recent process and is not stale, THEN THE devbox adapter SHALL reject the mutation with a config failure instead of merging concurrent writers.
-
-**Postcondition:** The previously committed config remains unchanged.
-
-```alloy
-// --- Atomic config mutation: single-writer lock protocol ---
-// Issue 17 fix: Commands atomically acquire-mutate-release in a single transition
-// (guard: lockState = Free, effect: lockState' = Free). External processes may hold
-// the lock, which is modeled via external_lock_acquired/external_lock_holder_dies.
-
-// Issue 8 fix: External lock acquisition allows Held state to be reachable,
-// making lock_rejected and stale recovery non-vacuous.
-pred external_lock_acquired {
-  LockModel.lockState = Free
-  LockModel.lockState' = Held
-  LockModel.lockHolderAlive' = True
-  // Frame: no config change during external acquisition
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = CommandState.lastOutcome
-  CommandState.awsMutated' = CommandState.awsMutated
-  CommandState.configMutated' = CommandState.configMutated
-}
-
-pred external_lock_holder_dies {
-  LockModel.lockState = Held
-  LockModel.lockHolderAlive = True
-  LockModel.lockHolderAlive' = False
-  LockModel.lockState' = LockModel.lockState
-  // Frame
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = CommandState.lastOutcome
-  CommandState.awsMutated' = CommandState.awsMutated
-  CommandState.configMutated' = CommandState.configMutated
-}
-
-pred lock_rejected {
-  // Lock is held by a live, recent process
-  LockModel.lockState = Held
-  LockModel.lockHolderAlive = True
-  // Effect: mutation rejected
-  LockModel.lockState' = LockModel.lockState
-  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = ConfigError
-  CommandState.awsMutated' = False
-  CommandState.configMutated' = False
-}
-
-// Issue 8 fix: single_writer now verifies that config mutation requires lock = Free
-// (instead of vacuously asserting that Held implies no change)
-assert single_writer {
-  always (
-    Config.boxes' != Config.boxes implies LockModel.lockState = Free)
-}
-
-// Safety: committed config is always well-formed after successful mutation
-assert committed_config_valid {
-  always (CommandState.configMutated' = True implies after config_wellformed)
-}
-```
-
-### Requirement: List Output Format [BOX-CLI-LIST-FORMAT]
-WHEN `devbox list` prints tracked boxes, THE devbox CLI SHALL render a human-readable terminal table with columns: current-box indicator, alias, instance ID, instance type, and state.
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Scope`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
-
-#### Scenario: Table With Current Indicator [BOX-LIST-TABLE]
-WHEN tracked boxes exist and AWS enrichment succeeds, THE devbox CLI SHALL print a table where the current box row is marked with `*` in the first column and other rows show a space.
-
-**Postcondition:** The table includes alias, instance ID, instance type, and one of the state values: `running`, `stopped`, `pending`, `stopping`, `shutting-down`, `terminated`, `stale`, or `unknown`.
-
-#### Scenario: Empty Registry Prints Message [BOX-LIST-EMPTY]
-WHEN no boxes are tracked, THE devbox CLI SHALL print the single line `No boxes tracked`.
-
-**Postcondition:** No table header or empty table is rendered.
-
-```alloy
-// --- List command: read-only enrichment with graceful degradation ---
-
-// List enrichment states for each tracked box
-abstract sig EnrichState {}
-one sig Enriched, Stale, Unknown extends EnrichState {}
-
-pred list_command {
-  // List is always read-only: no config mutation
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = CmdSuccess
-  CommandState.awsMutated' = False
-  CommandState.configMutated' = False
-  LockModel.lockState' = LockModel.lockState
-  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
-}
-
-// Safety: list never mutates config regardless of AWS availability
-assert list_never_mutates {
-  always (list_command implies (
-    Config.boxes' = Config.boxes and
-    Config.current' = Config.current and
-    CommandState.awsMutated' = False))
-}
-
-// Safety: list always succeeds (graceful degradation)
-assert list_always_succeeds {
-  always (list_command implies CommandState.lastOutcome' = CmdSuccess)
-}
-```
-
-### Requirement: Config Permissions [BOX-ADAPTER-PERMS]
-WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0600` (read-write for the user only).
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
-
-#### Scenario: Config Created With Standard Permissions [BOX-PERMS-CONFIG]
-WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0600` (read-write for the user only).
-
-**Postcondition:** The config file is readable by the owner and group/others.
-
-### Requirement: Stale Lock Specification [BOX-ADAPTER-STALELOCK]
-WHEN the advisory lock file exists and the current process needs to acquire it, THE devbox adapter SHALL detect staleness using PID validity, PID liveness, and a 5-minute mtime threshold.
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
-
-#### Scenario: Stale Lock By Dead PID [BOX-STALELOCK-PID]
-WHEN the lock file contains a PID that does not correspond to a running process, THE devbox adapter SHALL treat the lock as stale, remove it, and retry acquisition once.
-
-**Postcondition:** The stale lock does not permanently block the mutation.
-
-#### Scenario: Stale Lock By Age [BOX-STALELOCK-AGE]
-WHEN the lock file mtime is older than 5 minutes, THE devbox adapter SHALL treat the lock as stale regardless of PID liveness.
-
-**Postcondition:** Long-orphaned locks are recovered automatically.
-
-#### Scenario: Live Lock Not Stolen [BOX-STALELOCK-LIVE]
-WHEN the lock file contains a valid PID of a running process and the mtime is within 5 minutes, THE devbox adapter SHALL reject the mutation with `ConfigError`.
-
-**Postcondition:** A live, recent lock holder is never preempted.
-
-```alloy
-// --- Stale lock recovery protocol ---
-
-pred stale_by_dead_pid {
-  LockModel.lockState = Held
-  LockModel.lockHolderAlive = False
-  // Recovery: remove stale lock, retry once
-  LockModel.lockState' = Free
-  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
-  // Frame: no config change during recovery
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = CommandState.lastOutcome
-  CommandState.awsMutated' = CommandState.awsMutated
-  CommandState.configMutated' = CommandState.configMutated
-}
-
-pred stale_by_age {
-  // Lock held but older than 5 minutes (modeled as state rather than time)
-  LockModel.lockState = StaleByAge
-  // Recovery: same as dead PID
-  LockModel.lockState' = Free
-  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = CommandState.lastOutcome
-  CommandState.awsMutated' = CommandState.awsMutated
-  CommandState.configMutated' = CommandState.configMutated
-}
-
-pred live_lock_blocks {
-  // Lock held, holder alive, within 5 minutes
-  LockModel.lockState = Held
-  LockModel.lockHolderAlive = True
-  // Rejection: ConfigError
-  LockModel.lockState' = LockModel.lockState
-  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
-  Config.boxes' = Config.boxes
-  Config.current' = Config.current
-  Config.defaultSshUser' = Config.defaultSshUser
-  Config.boxSshUser' = Config.boxSshUser
-  Config.hasLastConnectAt' = Config.hasLastConnectAt
-  CommandState.lastOutcome' = ConfigError
-  CommandState.awsMutated' = False
-  CommandState.configMutated' = False
-}
-
-// Issue 18 fix: live lock holder stays Held (not the weaker != Free || == self)
-assert live_lock_never_stolen {
-  always (
-    (LockModel.lockState = Held and LockModel.lockHolderAlive = True)
-      implies LockModel.lockState' = Held)
-}
-
-// Issue 19 fix: leads-to formulation instead of always-eventually-implies
-pred stale_lock_fairness {
-  always (
-    (LockModel.lockState = Held and LockModel.lockHolderAlive = False)
-      implies eventually LockModel.lockState = Free)
-  always (
-    LockModel.lockState = StaleByAge
-      implies eventually LockModel.lockState = Free)
-}
-
-assert stale_locks_recovered {
-  stale_lock_fairness implies
-    always ((LockModel.lockState in (Held + StaleByAge) and
-             (LockModel.lockHolderAlive = False or LockModel.lockState = StaleByAge))
-      implies eventually LockModel.lockState = Free)
-}
-```
 
 ### Requirement: Remove Clears Current [BOX-DOMAIN-RM-CURRENT]
 WHEN `rm` removes an alias that is the current box, THE devbox domain SHALL clear `current` by removing it from config entirely rather than reassigning it to another box.
@@ -1055,7 +865,7 @@ WHEN the template uses top-level `SecurityGroups` without `NetworkInterfaces`, T
 
 ```alloy
 // --- Template validation: structural constraints on init input ---
-// Issue 20 fix: Template is now connected to init events via init_success[a, iid, t]
+// Template is now connected to init events via init_success[a, iid, t]
 // and init_template_rejected[a, t], making these assertions non-vacuous.
 
 abstract sig TemplateField {}
@@ -1161,7 +971,7 @@ pred tag_merge_postcondition [finalTags : TagKey -> TagValue, aliasTag : TagValu
   some finalTags
 }
 
-// Issue 9 fix: verifies tag_merge_postcondition actually enforces Name = alias
+// Verifies tag_merge_postcondition actually enforces Name = alias
 assert name_tag_always_alias {
   all finalTags : TagKey -> TagValue, aliasTag : TagValue |
     tag_merge_postcondition[finalTags, aliasTag] implies finalTags[NameKey] = aliasTag
@@ -1283,19 +1093,214 @@ assert list_shows_all_tracked {
 }
 ```
 
-### Requirement: Remove Without Terminate Warning [BOX-DOMAIN-RM-WARN]
-WHEN `rm <alias>` is invoked without `--terminate`, THE devbox CLI SHALL print a warning that the AWS resources associated with the removed alias may still exist.
+- - -
+
+**Adapter Layer:** filesystem/AWS/process boundary mechanics.
+
+### Requirement: Atomic Config Mutation [BOX-ADAPTER-ATOMIC]
+WHEN a mutating registry command commits config state, THE devbox adapter SHALL use single-writer advisory locking, temp-file write, `fsync`, atomic replace, and best-effort stale-lock recovery.
 
 **References:**
 - `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
 - `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
 - `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
 
-#### Scenario: Local Remove Warns About AWS Resources [BOX-RM-WARN-MSG]
-WHEN `rm <alias>` succeeds without `--terminate`, THE devbox CLI SHALL emit a warning to stderr indicating that the tracked instance may still be running in AWS.
+#### Scenario: Successful Atomic Replace [BOX-ATOMIC-SUCCESS]
+WHEN the adapter acquires the advisory lock and completes the write flow successfully, THE devbox adapter SHALL leave a schema-valid committed config and remove the lock file on normal completion.
 
-**Postcondition:** The user is informed that local removal does not affect AWS resource lifecycle.
+**Postcondition:** The target config path contains the full next config and no partial JSON.
 
+#### Scenario: Live Lock Rejected [BOX-ATOMIC-FAIL]
+IF the advisory lock is held by a live, recent process and is not stale, THEN THE devbox adapter SHALL reject the mutation with a config failure instead of merging concurrent writers.
+
+**Postcondition:** The previously committed config remains unchanged.
+
+```alloy
+// --- Atomic config mutation: single-writer lock protocol ---
+// Commands atomically acquire-mutate-release in a single state transition
+// (guard: lockState = Free, effect: lockState' = Free). External processes may hold
+// the lock, which is modeled via external_lock_acquired/external_lock_holder_dies.
+
+// External lock acquisition allows Held state to be reachable,
+// making lock_rejected and stale recovery non-vacuous.
+pred external_lock_acquired {
+  LockModel.lockState = Free
+  LockModel.lockState' = Held
+  LockModel.lockHolderAlive' = True
+  // Frame: no config change during external acquisition
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = CommandState.lastOutcome
+  CommandState.awsMutated' = CommandState.awsMutated
+  CommandState.configMutated' = CommandState.configMutated
+}
+
+pred external_lock_holder_dies {
+  LockModel.lockState = Held
+  LockModel.lockHolderAlive = True
+  LockModel.lockHolderAlive' = False
+  LockModel.lockState' = LockModel.lockState
+  // Frame
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = CommandState.lastOutcome
+  CommandState.awsMutated' = CommandState.awsMutated
+  CommandState.configMutated' = CommandState.configMutated
+}
+
+pred lock_rejected {
+  // Lock is held by a live, recent process
+  LockModel.lockState = Held
+  LockModel.lockHolderAlive = True
+  // Effect: mutation rejected
+  LockModel.lockState' = LockModel.lockState
+  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = ConfigError
+  CommandState.awsMutated' = False
+  CommandState.configMutated' = False
+}
+
+// single_writer verifies that config mutation requires lock = Free
+// (instead of vacuously asserting that Held implies no change)
+assert single_writer {
+  always (
+    Config.boxes' != Config.boxes implies LockModel.lockState = Free)
+}
+
+// Safety: committed config is always well-formed after successful mutation
+assert committed_config_valid {
+  always (CommandState.configMutated' = True implies after config_wellformed)
+}
+```
+
+### Requirement: Config Permissions [BOX-ADAPTER-PERMS]
+WHEN the config-store adapter creates config or lock files, THE devbox adapter SHALL create them with mode `0600` (read-write for the user only).
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
+
+#### Scenario: Config Created With Standard Permissions [BOX-PERMS-CONFIG]
+WHEN a mutating command creates `~/.config/devbox.json` for the first time, THE devbox adapter SHALL set file mode `0600` (read-write for the user only).
+
+**Postcondition:** The config file is readable by the owner and group/others.
+
+### Requirement: Stale Lock Specification [BOX-ADAPTER-STALELOCK]
+WHEN the advisory lock file exists and the current process needs to acquire it, THE devbox adapter SHALL detect staleness using PID validity, PID liveness, and a 5-minute mtime threshold.
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Quality Attributes`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Stale Lock By Dead PID [BOX-STALELOCK-PID]
+WHEN the lock file contains a PID that does not correspond to a running process, THE devbox adapter SHALL treat the lock as stale, remove it, and retry acquisition once.
+
+**Postcondition:** The stale lock does not permanently block the mutation.
+
+#### Scenario: Stale Lock By Age [BOX-STALELOCK-AGE]
+WHEN the lock file mtime is older than 5 minutes, THE devbox adapter SHALL treat the lock as stale regardless of PID liveness.
+
+**Postcondition:** Long-orphaned locks are recovered automatically.
+
+#### Scenario: Live Lock Not Stolen [BOX-STALELOCK-LIVE]
+WHEN the lock file contains a valid PID of a running process and the mtime is within 5 minutes, THE devbox adapter SHALL reject the mutation with `ConfigError`.
+
+**Postcondition:** A live, recent lock holder is never preempted.
+
+```alloy
+// --- Stale lock recovery protocol ---
+
+pred stale_by_dead_pid {
+  LockModel.lockState = Held
+  LockModel.lockHolderAlive = False
+  // Recovery: remove stale lock, retry once
+  LockModel.lockState' = Free
+  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
+  // Frame: no config change during recovery
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = CommandState.lastOutcome
+  CommandState.awsMutated' = CommandState.awsMutated
+  CommandState.configMutated' = CommandState.configMutated
+}
+
+pred stale_by_age {
+  // Lock held but older than 5 minutes (modeled as state rather than time)
+  LockModel.lockState = StaleByAge
+  // Recovery: same as dead PID
+  LockModel.lockState' = Free
+  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = CommandState.lastOutcome
+  CommandState.awsMutated' = CommandState.awsMutated
+  CommandState.configMutated' = CommandState.configMutated
+}
+
+pred live_lock_blocks {
+  // Lock held, holder alive, within 5 minutes
+  LockModel.lockState = Held
+  LockModel.lockHolderAlive = True
+  // Rejection: ConfigError
+  LockModel.lockState' = LockModel.lockState
+  LockModel.lockHolderAlive' = LockModel.lockHolderAlive
+  Config.boxes' = Config.boxes
+  Config.current' = Config.current
+  Config.defaultSshUser' = Config.defaultSshUser
+  Config.boxSshUser' = Config.boxSshUser
+  Config.hasLastConnectAt' = Config.hasLastConnectAt
+  CommandState.lastOutcome' = ConfigError
+  CommandState.awsMutated' = False
+  CommandState.configMutated' = False
+}
+
+// Live lock holder stays Held (not the weaker != Free || == self)
+assert live_lock_never_stolen {
+  always (
+    (LockModel.lockState = Held and LockModel.lockHolderAlive = True)
+      implies LockModel.lockState' = Held)
+}
+
+// Fairness uses a "leads-to" formulation instead of always-eventually-implies
+pred stale_lock_fairness {
+  always (
+    (LockModel.lockState = Held and LockModel.lockHolderAlive = False)
+      implies eventually LockModel.lockState = Free)
+  always (
+    LockModel.lockState = StaleByAge
+      implies eventually LockModel.lockState = Free)
+}
+
+assert stale_locks_recovered {
+  stale_lock_fairness implies
+    always ((LockModel.lockState in (Held + StaleByAge) and
+             (LockModel.lockHolderAlive = False or LockModel.lockState = StaleByAge))
+      implies eventually LockModel.lockState = Free)
+}
+```
+
+### State machine and invariant checks
 ```alloy
 // --- Transition system ---
 
@@ -1326,7 +1331,7 @@ pred init_state {
 
 fact transitions {
   init_state and always (
-    // Registry commands (issue 20: Template connected via init events)
+    // Registry commands
     (some a : Alias, iid : InstanceId, t : Template | init_success[a, iid, t] or init_consistency_error[a, iid, t])
     or (some a : Alias, t : Template | init_template_rejected[a, t])
     or (some a : Alias, iid : InstanceId | add_success[a, iid] or add_fails[a, iid])
@@ -1338,7 +1343,7 @@ fact transitions {
     or informational_command
     // Rejections
     or (some a : Alias | missing_alias_rejected[a])
-    // Lock protocol (issue 8: external lock events make Held reachable)
+    // Lock protocol
     or lock_rejected
     or live_lock_blocks
     or stale_by_dead_pid

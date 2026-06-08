@@ -9,11 +9,9 @@ The purpose of this capability is to preserve trust across local state, AWS stat
 
 ```alloy
 module RemoteAccess
+open util/boolean
 
-// --- Signatures: Remote access domain vocabulary ---
-
-abstract sig Bool {}
-one sig True, False extends Bool {}
+// --- Remote access domain vocabulary ---
 
 sig Instance {
   var running : one Bool,
@@ -72,7 +70,6 @@ one sig CpState {
 }
 
 // Key storage: agent preference and temp-key lifecycle
-// Issue 22 fix: removed unused SshExitCode sig
 abstract sig KeySource {}
 one sig AgentKey, TempKey extends KeySource {}
 
@@ -83,6 +80,8 @@ one sig KeyStore {
 ```
 
 ## Requirements
+
+**CLI Layer:** command surface, parsing, output, and composition of domain+adapters.
 
 ### Requirement: CLI Remote Access Commands [REMOTE-CLI-CMDS]
 THE devbox CLI SHALL provide `connect` and `cp <local> <remote>` commands, each supporting an invocation-time `--ssh-user <user>` override.
@@ -110,7 +109,6 @@ pred no_current_box {
   no current
 }
 
-// Issue 10/11 fix: all events now include CpState and KeyStore frame conditions
 pred remote_rejected_no_current {
   // Guard: no current box
   no_current_box
@@ -144,6 +142,10 @@ assert no_transport_without_current {
   always (no_current_box implies Session.transportStarted' = False)
 }
 ```
+
+- - -
+
+**Domain Layer:** deterministic business rules and state machine.
 
 ### Requirement: Remote Access Preconditions [REMOTE-DOMAIN-PRECOND]
 WHILE `connect` or `cp` is running, THE devbox domain SHALL require the current instance to be `running`, require the instance to become SSM-ready within the readiness timeout, and require all documented local dependencies for the requested command.
@@ -590,8 +592,8 @@ pred path_unsafe [p : RemotePath] {
   p.hasControlChars = True or p.isEmpty = True
 }
 
-// Issue 21 fix: path_rejected now has a phase guard — only fires at Idle (command start)
 pred path_rejected [p : RemotePath] {
+  // Guard
   path_unsafe[p]
   Session.phase = Idle   // path validation occurs at command start, before any setup
   // Effect: fail before any transport
@@ -614,7 +616,7 @@ pred path_rejected [p : RemotePath] {
   KeyStore.tempFilesExist' = KeyStore.tempFilesExist
 }
 
-// Issue 15 fix: scoped to path_rejected event (not all path atoms globally)
+// Scoped to path_rejected event (not all path atoms globally)
 assert unsafe_path_never_transported {
   always (all p : RemotePath |
     path_rejected[p] implies Session.transportStarted' = False)
@@ -626,6 +628,68 @@ assert unsafe_path_never_reaches_remote {
     path_rejected[p] implies Session.phase' != Transporting)
 }
 ```
+
+### Requirement: Connect Session Lifecycle [REMOTE-DOMAIN-SESSION]
+WHEN `connect` hands off the SSH session, THE devbox process SHALL either exec into or wait on the SSH child process and SHALL exit with the SSH process exit code.
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Connect Propagates SSH Exit Code [REMOTE-SESSION-EXIT]
+WHEN the SSH session terminates, THE devbox connect process SHALL exit with the same exit code as the SSH child process.
+
+**Postcondition:** The caller observes the SSH session's actual exit status.
+
+```alloy
+// --- Session lifecycle: exit code propagation ---
+
+pred session_terminates [sshExit : Int] {
+  Session.phase = Done or Session.phase = Failed
+  // Exit code is propagated from SSH child
+  CommandResult.exitCode' = sshExit
+}
+
+// Verifies exit code is set (not the tautology x' = x')
+assert exit_code_propagated {
+  always (
+    Session.phase' = Done implies some CommandResult.exitCode')
+}
+```
+
+### Requirement: Copy File Size [REMOTE-DOMAIN-FILESIZE]
+WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce an artificial file size limit.
+
+**References:**
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
+- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
+
+#### Scenario: Large File Accepted [REMOTE-CP-LARGESIZE]
+WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
+
+**Postcondition:** SCP and network bandwidth are the natural transfer constraints.
+
+```alloy
+// --- File size: no artificial limit ---
+// This is a structural non-constraint: the model deliberately does NOT
+// include a file size guard. The absence of a size predicate in the
+// cp_success guard formalizes this requirement.
+
+// Allows stutter (Transporting stays Transporting) which is valid.
+// The assertion verifies that no OTHER phase is reachable from Transporting —
+// only Done, Failed, or staying in Transporting. No artificial size-based rejection.
+assert no_artificial_size_limit {
+  always (
+    (some current and Session.phase = Transporting and Session.keyStaged = True)
+      implies Session.phase' in (Done + Failed + Transporting))
+}
+```
+
+- - -
+
+**Adapter Layer:** filesystem/AWS/process boundary mechanics.
 
 ### Requirement: Temporary Key Staging [REMOTE-ADAPTER-STAGE]
 WHEN `connect` or `cp` begins remote-access setup, THE devbox adapter SHALL follow the documented `ssh-over-ssm` style workflow by staging a temporary SSH public key through AWS SSM before starting the SSH transport session.
@@ -648,7 +712,7 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 
 ```alloy
 // --- Key staging: staging must complete before transport ---
-// Issue 25 fix: KeyStore events are integrated into staging_success
+// KeyStore events are integrated into staging_success
 // (agent key vs temp key is determined nondeterministically at staging time)
 
 pred staging_success [a : Alias] {
@@ -744,7 +808,7 @@ assert cleanup_always_scheduled_after_staging {
       implies Session.cleanupScheduled' = True)
 }
 
-// Issue 13 fix: liveness with explicit fairness premise
+// Liveness with explicit fairness premise
 pred session_progress_fairness {
   always (
     Session.phase in (Idle + WaitingSSM + Staging + Transporting)
@@ -783,7 +847,6 @@ WHEN a temporary SSH public key is staged on the remote instance, THE devbox ada
 
 ```alloy
 // --- Key storage: agent preference and temp-key lifecycle ---
-// Issue 25 fix: remove_temp_files is now a proper event in the transitions fact
 
 pred remove_temp_files_event {
   // Guard: session complete, temp files exist
@@ -814,7 +877,6 @@ assert agent_key_no_temp_files {
   always (KeyStore.source = AgentKey implies KeyStore.tempFilesExist = False)
 }
 
-// Issue 13 fix: temp file removal needs fairness (non-stutter when cleanup enabled)
 // Fairness covers entire path: transport completes AND cleanup fires
 pred temp_cleanup_fairness {
   // Transport must eventually complete when in progress
@@ -833,64 +895,7 @@ assert temp_files_eventually_removed {
 }
 ```
 
-### Requirement: Connect Session Lifecycle [REMOTE-DOMAIN-SESSION]
-WHEN `connect` hands off the SSH session, THE devbox process SHALL either exec into or wait on the SSH child process and SHALL exit with the SSH process exit code.
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
-
-#### Scenario: Connect Propagates SSH Exit Code [REMOTE-SESSION-EXIT]
-WHEN the SSH session terminates, THE devbox connect process SHALL exit with the same exit code as the SSH child process.
-
-**Postcondition:** The caller observes the SSH session's actual exit status.
-
-```alloy
-// --- Session lifecycle: exit code propagation ---
-// Issue 22 fix: removed unused SshExitCode sig
-
-pred session_terminates [sshExit : Int] {
-  Session.phase = Done or Session.phase = Failed
-  // Exit code is propagated from SSH child
-  CommandResult.exitCode' = sshExit
-}
-
-// Issue 12 fix: verifies exit code is set (not the tautology x' = x')
-assert exit_code_propagated {
-  always (
-    Session.phase' = Done implies some CommandResult.exitCode')
-}
-```
-
-### Requirement: Copy File Size [REMOTE-DOMAIN-FILESIZE]
-WHEN `cp` validates the local source file, THE devbox domain SHALL NOT enforce an artificial file size limit.
-
-**References:**
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#proposed-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/design.md#component-design`
-- `openspec/changes/archive/2026-06-05-devbox-core/proposal.md#Preconditions, Postconditions, and Invariants`
-
-#### Scenario: Large File Accepted [REMOTE-CP-LARGESIZE]
-WHEN the local source is a readable regular file of any size, THE devbox domain SHALL allow the transfer to proceed without rejecting it based on file size alone.
-
-**Postcondition:** SCP and network bandwidth are the natural transfer constraints.
-
-```alloy
-// --- File size: no artificial limit ---
-// This is a structural non-constraint: the model deliberately does NOT
-// include a file size guard. The absence of a size predicate in the
-// cp_success guard formalizes this requirement.
-
-// Issue 14 fix: allows stutter (Transporting stays Transporting) which is valid.
-// The assertion verifies that no OTHER phase is reachable from Transporting —
-// only Done, Failed, or staying in Transporting. No artificial size-based rejection.
-assert no_artificial_size_limit {
-  always (
-    (some current and Session.phase = Transporting and Session.keyStaged = True)
-      implies Session.phase' in (Done + Failed + Transporting))
-}
-```
+### State machine and invariant checks
 
 ```alloy
 // --- Transition system ---
@@ -930,7 +935,6 @@ pred init {
   all i : Instance | i.running = True and i.ssmReady = False
 }
 
-// Issue 25 fix: KeyStore event (remove_temp_files_event) is now in transitions
 fact transitions {
   init and always (
     // Precondition checks

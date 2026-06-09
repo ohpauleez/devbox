@@ -11,7 +11,7 @@ This document is a codemap for `devbox`. It is aimed at contributors who need to
 - AWS is the source of truth for live instance existence and instance state
 - remote access is staged temporarily through SSM-backed SSH rather than long-lived hidden access state
 
-The OpenSpec change under `openspec/changes/devbox-core/` is the durable design intent for the project. This file complements it by mapping that design onto the code that exists in this repository.
+The living design doc under `docs/design.md` is the durable design intent for the project and the main technical documenation. This file complements it by mapping that design onto the code that exists in this repository.
 
 This project follows a lightweight formal methods approach defined in [`docs/lfm.md`](docs/lfm.md).
 All code adheres to the style guide defined in [`docs/typescript_style.md`](docs/typescript_style.md).

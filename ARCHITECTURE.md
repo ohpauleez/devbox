@@ -398,3 +398,11 @@ justification for why EARS is insufficient.
 
 Specs are all traceable through the code and tests using [spec-traceability](docs/spec_traceability.md).
 Test tooling ensures that all specs are covered by tests.
+
+### Existing Specs
+
+- [box-registry](/openspec/specs/box-registry/spec.md) - Defines the local box-registry behavior for `devbox`: tracking named EC2 development machines, selecting the current box, listing tracked boxes, and handling `init`, `add`, `rm`, and `switch` with local config as the durable source of truth.
+- [distribution](/openspec/specs/distribution/spec.md) - Defines the supported distribution contracts for `devbox` so the CLI can be installed through `npm` and shipped as a bundled `dist/devbox.js` artifact while preserving the same user-visible behavior, help/version surface, outputs, exit codes, and Node.js runtime expectations.
+- [instance-lifecycle](/openspec/specs/instance-lifecycle/spec.md) - Defines the lifecycle-control behavior for the current tracked `devbox` machine, with the active AWS account and region treated as authoritative for live state.
+- [remote-access](/openspec/specs/remote-access/spec.md) - Defines the remote-access behavior for `devbox connect` and upload-only `devbox cp` over AWS SSM-backed SSH, including invocation-time SSH-user overrides, readiness checks, remote-path safety, temporary key staging, bounded cleanup, and post-success consistency handling.
+- [spec-traceability](/openspec/specs/spec-traceability/spec.md) - Defines the OpenSpec traceability behavior for the repository's TypeScript/Vitest test harness: discovering canonical identifiers from included OpenSpec specs, validating explicit `traceSpec(...)` declarations in tests, reporting provenance-aware diagnostics, and enforcing full-catalog coverage in a dedicated full-suite mode.

@@ -237,9 +237,46 @@ The durable local registry is stored at `~/.config/devbox.json`. The advisory lo
 
 Specs: [`box-registry`](../openspec/specs/box-registry/spec.md)
 
-`init` accepts only the documented launch-template-style top-level fields:
+`init` accepts a launch-template-style JSON object. The supported top-level keys are:
 
-`BlockDeviceMappings`, `CapacityReservationSpecification`, `CpuOptions`, `CreditSpecification`, `DisableApiStop`, `DisableApiTermination`, `EbsOptimized`, `EnclaveOptions`, `HibernationOptions`, `IamInstanceProfile`, `ImageId`, `InstanceInitiatedShutdownBehavior`, `InstanceMarketOptions`, `InstanceType`, `KernelId`, `KeyName`, `LicenseSpecifications`, `MaintenanceOptions`, `MetadataOptions`, `Monitoring`, `NetworkInterfaces`, `Placement`, `PrivateDnsNameOptions`, `RamDiskId`, `SecurityGroupIds`, `SecurityGroups`, `TagSpecifications`, and `UserData`.
+```json
+{
+  "BlockDeviceMappings": [ BlockDeviceMapping, ... ],
+  "CapacityReservationSpecification": CapacityReservationSpecification,
+  "CpuOptions": CpuOptions,
+  "CreditSpecification": CreditSpecification,
+  "DisableApiStop": Boolean,
+  "DisableApiTermination": Boolean,
+  "EbsOptimized": Boolean,
+  "EnclaveOptions": EnclaveOptions,
+  "HibernationOptions": HibernationOptions,
+  "IamInstanceProfile": IamInstanceProfile,
+  "ImageId": String,
+  "InstanceInitiatedShutdownBehavior": String,
+  "InstanceMarketOptions": InstanceMarketOptions,
+  "InstanceType": String,
+  "KernelId": String,
+  "KeyName": String,
+  "LicenseSpecifications": [ LicenseSpecification, ... ],
+  "MaintenanceOptions": MaintenanceOptions,
+  "MetadataOptions": MetadataOptions,
+  "Monitoring": Monitoring,
+  "NetworkInterfaces": [ NetworkInterface, ... ],
+  "Placement": Placement,
+  "PrivateDnsNameOptions": PrivateDnsNameOptions,
+  "RamDiskId": String,
+  "SecurityGroupIds": [ String, ... ],
+  "SecurityGroups": [ String, ... ],
+  "TagSpecifications": [ TagSpecification, ... ],
+  "UserData": String
+}
+```
+
+This is a top-level allowlist, not a complete nested schema. Nested object shapes and valid field values follow the AWS EC2 launch template and instance launch documentation:
+
+- [Create launch templates for Amazon EC2 instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/create-launch-template.html)
+- [AWS::EC2::LaunchTemplate LaunchTemplateData reference](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-ec2-launchtemplate-launchtemplatedata.html)
+- [EC2 RunInstances API reference](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html)
 
 Unknown fields and `InstanceRequirements` are rejected before any AWS call.
 
@@ -302,20 +339,16 @@ Specs: [`remote-access`](../openspec/specs/remote-access/spec.md)
 
 ### Global Preconditions
 
-| Claim |
-|---|
-| the process can access the user's home directory and config path when local state is needed |
-| config, if present and required, is valid according to the config model |
-| AWS-dependent commands run with credentials, account, and region established outside `devbox` |
-| remote-access commands require the relevant local executables and SSM prerequisites |
+- the process can access the user's home directory and config path when local state is needed
+- config, if present and required, is valid according to the config model
+- AWS-dependent commands run with credentials, account, and region established outside `devbox`
+- remote-access commands require the relevant local executables and SSM prerequisites
 
 ### Global Postconditions
 
-| Claim |
-|---|
-| successful mutating local commands leave a schema-valid committed config |
-| successful external mutation followed by failed local commit is reported explicitly as divergence |
-| supported distribution forms preserve the same user-visible command contracts |
+- successful mutating local commands leave a schema-valid committed config
+- successful external mutation followed by failed local commit is reported explicitly as divergence
+- supported distribution forms preserve the same user-visible command contracts
 
 ### Global Invariants
 
@@ -956,7 +989,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: session started- local metadata may be stale
+        C-->>U: session started, local metadata may be stale
     end
 ```
 
@@ -1011,7 +1044,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: remote file updated- local metadata may be stale
+        C-->>U: remote file updated, local metadata may be stale
     end
 ```
 

@@ -828,7 +828,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: session started; local metadata may be stale
+        C-->>U: session started, local metadata may be stale
     end
 ```
 
@@ -877,7 +877,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: remote file updated; local metadata may be stale
+        C-->>U: remote file updated, local metadata may be stale
     end
 ```
 

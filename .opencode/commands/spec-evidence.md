@@ -82,20 +82,6 @@ IF the current instance state is `shutting-down` or `terminated`, THEN THE devbo
 
 **Postcondition:** No invalid lifecycle transition is requested.
 
-```alloy
-// --- Up command state machine ---
-
-// Legal starting states for 'up'
-fun up_legal_states : set InstanceState {
-      Stopped + Pending + Running + Stopping
-}
-
-// Illegal starting states for 'up'
-fun up_illegal_states : set InstanceState {
-      ShuttingDown + Terminated
-}
-```
-
 ##### Evidence
 - Implementation: [InstanceLifecycle.java:92 up(InstanceState)](/src/main/java/com/example/devbox/InstanceLifecycle.java#L92)
 - Example:

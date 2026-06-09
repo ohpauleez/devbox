@@ -5,6 +5,29 @@
 
 ---
 
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Scope and Boundaries](#2-scope-and-boundaries)
+3. [Architecture](#3-architecture)
+4. [Domain Model](#4-domain-model)
+5. [Preconditions, Postconditions, and Invariants](#5-preconditions-postconditions-and-invariants)
+6. [State Machines](#6-state-machines)
+7. [Interaction Protocols](#7-interaction-protocols)
+8. [Failure Modes and Error Model](#8-failure-modes-and-error-model)
+9. [Safety and Liveness Claims](#9-safety-and-liveness-claims)
+10. [Quality Attributes](#10-quality-attributes)
+11. [Verification Strategy](#11-verification-strategy)
+12. [Distribution and Packaging](#12-distribution-and-packaging)
+13. [Security and Trust Boundaries](#13-security-and-trust-boundaries)
+14. [Operational Concerns](#14-operational-concerns)
+15. [Forward Evolution](#15-forward-evolution)
+16. [Command and Interaction Summary](#16-command-and-interaction-summary)
+17. [Relationship to Other Documents](#17-relationship-to-other-documents)
+18. [Maintenance Rules](#18-maintenance-rules)
+
+---
+
 ## 1. Overview
 
 ### 1.1 What Devbox Is

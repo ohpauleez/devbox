@@ -10,7 +10,6 @@ The most relevant capability specs are:
 | [`instance-lifecycle`](../openspec/specs/instance-lifecycle/spec.md) | `up`/`down`, EC2 state transitions, bounded polling |
 | [`remote-access`](../openspec/specs/remote-access/spec.md) | `connect`, `cp`, SSH-user resolution, SSM readiness, temp-key staging |
 | [`distribution`](../openspec/specs/distribution/spec.md) | `npm` distribution and `dist/devbox.js` parity |
-| [`spec-traceability`](../openspec/specs/spec-traceability/spec.md) | traceability between specs, tests, and verification evidence |
 
 ## Purpose and Role
 
@@ -151,8 +150,6 @@ erDiagram
     TrackedBox ||--o{ RemoteAccessSession : targets
     Defaults ||--|| RequiredTags : includes
     LaunchInput }o--|| AwsInstance : creates
-    DistributionArtifact ||--|| CliContract : preserves
-    SpecCatalog ||--o{ TraceEvidence : drives
 ```
 
 ### Primary Entities
@@ -959,7 +956,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: session started; local metadata may be stale
+        C-->>U: session started- local metadata may be stale
     end
 ```
 
@@ -1014,7 +1011,7 @@ sequenceDiagram
         D->>S: commit lastConnectAt
         S-->>D: commit failure
         D-->>C: ConsistencyError
-        C-->>U: remote file updated; local metadata may be stale
+        C-->>U: remote file updated- local metadata may be stale
     end
 ```
 

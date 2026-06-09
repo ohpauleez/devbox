@@ -1,6 +1,6 @@
 # Design
 
-This document is the living design description for `devbox`. It captures durable technical intent for the project and is intended to evolve alongside the OpenSpec artifacts, code, and tests. It complements the repository codemap in [`ARCHITECTURE.md`](../ARCHITECTURE.md), the lightweight formal methods guidance in [`lfm.md`](lfm.md), and the normative capability specs under [`../openspec/specs/`](../openspec/specs/).
+This document is the living design description for `devbox`. It captures durable technical intent for the project and is intended to evolve alongside the OpenSpec artifacts, code, and tests. It complements the repository codemap in [`ARCHITECTURE.md`](../ARCHITECTURE.md), the lightweight formal methods guidance in [`lfm.md`](lfm.md), and the normative capability specs under [`openspec/specs/`](../openspec/specs/).
 
 The most relevant capability specs are:
 
@@ -29,14 +29,22 @@ This design therefore emphasizes deterministic domain logic, explicit state tran
 
 ### Scope
 
-| In Scope | Out of Scope |
-|---|---|
-| top-level `--help` and `--version` behavior | AWS profile, credential, or region management inside `devbox` |
-| local box-registry behavior for `list`, `init`, `add`, `rm`, and `switch` | replacing AWS CLI with the AWS SDK |
-| lifecycle control for `up` and `down` | download, sync, directory copy, or general SSH orchestration beyond `connect` and upload-only `cp` |
-| remote access for `connect` and upload-only `cp` | tracking multiple AWS execution contexts in one local registry |
-| packaging parity between `npm` installation and `dist/devbox.js` | a background daemon, service, or distributed lock manager |
-| traceability infrastructure that ties specs, tests, and evidence together | dedicated CLI commands for editing per-box SSH-user overrides in v1 |
+In scope:
+
+- top-level informational behavior for `--help` and `--version`
+- local box-registry behavior for `list`, `init`, `add`, `rm`, and `switch`
+- lifecycle control for `up` and `down`
+- remote access for `connect` and upload-only `cp`
+- packaging and runtime parity between `npm` installation and `dist/devbox.js`
+- traceability infrastructure that keeps specs, tests, and evidence connected
+
+Out of scope:
+
+- AWS profile, credential, or region management inside `devbox`
+- replacing AWS CLI with the AWS SDK
+- download, sync, directory copy, or general SSH orchestration beyond the documented command set
+- tracking multiple AWS execution contexts in one local registry
+- a background daemon, service, or distributed lock manager
 
 ### Source-of-Truth Boundaries
 
@@ -49,11 +57,9 @@ This design therefore emphasizes deterministic domain logic, explicit state tran
 
 ### Thin-Wrapper Boundaries
 
-| Boundary | Mechanism |
-|---|---|
-| AWS effects | `aws` CLI subprocesses |
-| remote transport | `ssh` and `scp` subprocesses over SSM |
-| local persistence | a single config-store boundary that owns locking and atomic replacement |
+- AWS effects are performed through `aws`
+- remote transport is performed through `ssh` and `scp`
+- local persistence is performed through one config-store boundary that owns locking and atomic replacement
 
 ## Goals and Non-Goals
 
@@ -424,17 +430,6 @@ Specs: [`distribution`](../openspec/specs/distribution/spec.md)
 | `npm` package | primary installation path |
 | `dist/devbox.js` | bundled single-file artifact for Node.js 20+ |
 | parity requirement | help/version behavior, outputs, exit codes, and command contracts match across supported forms |
-
-### Spec Traceability
-
-Specs: [`spec-traceability`](../openspec/specs/spec-traceability/spec.md)
-
-| Concern | Contract |
-|---|---|
-| canonical identifiers | come from active OpenSpec specs, not archived changes |
-| traced tests | declare explicit identifiers through `traceSpec(...)` |
-| ordinary test runs | validate traced identifiers without requiring full coverage |
-| dedicated coverage mode | enforces complete identifier coverage across the catalog |
 
 ## State Machines
 
@@ -1100,12 +1095,12 @@ Relevant code: [`src/domain/errors.ts`](../src/domain/errors.ts)
 | Claim | Mechanism | Evidence Sources |
 |---|---|---|
 | config writes are atomic and single-writer | lock plus write/`fsync`/rename/dir-`fsync` protocol | [`box-registry` spec](../openspec/specs/box-registry/spec.md), config-store tests |
-| every committed config remains schema-valid | config schema validation and full-object commits | config-schema contract tests, config-store integration tests |
+| every committed config remains schema-valid | config schema validation and full-object commits | config-schema unit / contract tests, config-store integration tests |
 | alias uniqueness and `current` integrity are preserved | alias validation and config invariants | registry tests, property tests |
 | invalid lifecycle starting states never trigger AWS lifecycle requests | explicit `up` and `down` decision functions | [`instance-lifecycle` spec](../openspec/specs/instance-lifecycle/spec.md), lifecycle tests |
 | destructive AWS behavior is never implicit | separate terminate path and explicit lifecycle commands | registry and lifecycle integration tests |
 | `rm --terminate` does not remove local tracking before AWS acceptance | sequence ordering in remove flow | registry integration tests |
-| unsafe remote paths never reach a remote shell | path validation before transport | remote-path property tests and remote-access contract tests |
+| unsafe remote paths never reach a remote shell | path validation before transport | remote-path property tests and remote-access unit / contract tests |
 | failed `cp` does not partially overwrite the final destination path | temp upload plus remote finalization | remote command integration tests |
 | failed remote access does not update `lastConnectAt` | update occurs only after external success and local commit success | connect/cp integration tests |
 | persisted state is never treated as authoritative for live AWS state | describe calls at command time | lifecycle and remote-access flows |
@@ -1197,7 +1192,7 @@ The verification strategy follows the evidence pyramid described in [`lfm.md`](l
 graph BT
     Claims[Explicit Claims and Invariants] --> Models[Spec Models and Checkable Kernels]
     Models --> PBT[Property-Based Tests]
-    PBT --> CT[Contract Tests]
+    PBT --> CT[Unit / Contract Tests]
     CT --> IT[Integration and Distribution Tests]
     IT --> Trace[Traceability and CI Re-checking]
 ```
@@ -1206,7 +1201,7 @@ graph BT
 
 | Layer | Focus | Primary Sources |
 |---|---|---|
-| capability requirements | normative behavior | [`../openspec/specs/`](../openspec/specs/) |
+| capability requirements | normative behavior | [`openspec/specs/`](../openspec/specs/) |
 | design claims | architecture, sequencing, invariants, safety, liveness | this document |
 | implementation structure | where behavior lives and architectural boundaries | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) |
 | executable evidence | tests and traceability runs | `test/contract/`, `test/property/`, `test/integration/` |
@@ -1216,7 +1211,7 @@ graph BT
 | Layer | Coverage Focus |
 |---|---|
 | spec models and checkable kernels | state-machine obligations encoded in the capability specs, including Alloy models for selected tractable cores |
-| contract tests | stdout, stderr, exit codes, config parsing, output contracts, and command-specific rules |
+| unit / contract tests | stdout, stderr, exit codes, config parsing, output contracts, and command-specific rules |
 | property-based tests | alias/current integrity, lifecycle decisions, remote-path acceptance, SSH-user precedence, and other invariants |
 | integration tests | command flows, adapter boundaries, polling behavior, cleanup paths, and consistency-error handling |
 | distribution checks | package and bundle parity |
@@ -1228,8 +1223,8 @@ The key design claim is not that the system is fully proved. The key claim is th
 ## Relationship to Other Documents
 
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md) explains where behavior lives in code and which layer boundaries should be preserved.
-- [`../openspec/specs/`](../openspec/specs/) defines the normative behavior for each capability.
-- the archived core change under [`../openspec/changes/archive/2026-06-05-devbox-core/`](../openspec/changes/archive/2026-06-05-devbox-core/) is historical source material for the initial design baseline.
+- [`openspec/specs/`](../openspec/specs/) defines the normative behavior for each capability.
+- the archived core change under [`openspec/changes/archive/2026-06-05-devbox-core/`](../openspec/changes/archive/2026-06-05-devbox-core/) is historical source material for the initial design baseline.
 - [`lfm.md`](lfm.md) explains the assurance posture and evidence model.
 - [`state_machines.md`](state_machines.md) explains the implementation style used to make states, transitions, and invariants explicit.
 

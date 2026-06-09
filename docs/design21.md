@@ -25,7 +25,7 @@ Cloud-based development boxes require repetitive, error-prone AWS CLI commands. 
 
 ### 1.4 Design Philosophy
 
-This project applies **lightweight formal methods** ([docs/lfm.md](lfm.md)): state machines are modeled in Alloy before implementation, critical properties are expressed as preconditions/postconditions/invariants in code, and the verification pyramid (formal models, property-based tests, contract tests, integration tests) provides layered assurance.
+This project applies **lightweight formal methods** ([docs/lfm.md](lfm.md)): state machines are modeled in Alloy before implementation, critical properties are expressed as preconditions/postconditions/invariants in code, and the verification pyramid (formal models, property-based tests, unit / contract tests, integration tests) provides layered assurance.
 
 The design is centered on:
 
@@ -44,7 +44,6 @@ The goal is not a proof of the whole system. The goal is justified confidence: t
 - [`instance-lifecycle`](../openspec/specs/instance-lifecycle/spec.md)
 - [`remote-access`](../openspec/specs/remote-access/spec.md)
 - [`distribution`](../openspec/specs/distribution/spec.md)
-- [`spec-traceability`](../openspec/specs/spec-traceability/spec.md)
 
 ---
 
@@ -984,17 +983,17 @@ type Result<T, E> =
 
 | Claim | Mechanism | Verification |
 |-------|-----------|--------------|
-| **No false success** (lifecycle) | Success reported only after observing target state | Alloy assertion `noFalseSuccess`; contract tests |
+| **No false success** (lifecycle) | Success reported only after observing target state | Alloy assertion `noFalseSuccess`; unit / contract tests |
 | **No invalid transition** | `decideUpAction`/`decideDownAction` reject terminal/incompatible states | Alloy assertions `noInvalidUpDecision`, `noInvalidDownDecision`; exhaustive switch + `assertNever`; property tests |
 | **No data loss on crash** | Atomic write protocol (temp -> fsync -> rename -> dir-fsync) | Integration tests with crash simulation |
 | **No shell injection** | All subprocess calls use argv arrays via `execFile` | `process.ts` enforces this; no `exec` in codebase |
 | **No partial config state visible** | Readers see old or new config; never intermediate | `rename(2)` atomicity guarantee |
 | **No resource leak on signal** | SIGINT/SIGTERM handlers + `finally` blocks | Integration tests with signal injection |
 | **Alias uniqueness preserved** | Object key uniqueness + validation on write | Property tests (fast-check) |
-| **Destructive behavior never implicit** | `rm --terminate` is opt-in; no auto-termination | Contract tests for `rm` without flag |
+| **Destructive behavior never implicit** | `rm --terminate` is opt-in; no auto-termination | Unit / contract tests for `rm` without flag |
 | **Unsafe remote paths never reach shell** | Validation rejects before any SSH/SCP command | Property tests for path validation |
 | **Failed cp does not overwrite destination** | Upload to temp path; atomic remote move | Integration tests for partial-failure paths |
-| **Failed access does not update lastConnectAt** | Two-phase success gate (external + local) | Contract tests for failure paths |
+| **Failed access does not update lastConnectAt** | Two-phase success gate (external + local) | Unit / contract tests for failure paths |
 | **Persisted state never authoritative for live AWS** | Re-describe before every action | Architectural invariant; integration tests |
 
 ### 9.2 Liveness Properties
@@ -1044,7 +1043,7 @@ The project follows the **verification pyramid** from [docs/lfm.md](lfm.md):
 ```mermaid
 graph BT
     FM["Formal Models<br/>(Alloy 6)"] --> PBT["Property-Based Tests<br/>(fast-check)"]
-    PBT --> CT["Contract Tests<br/>(spec traceability)"]
+    PBT --> CT["Unit / Contract Tests<br/>(spec traceability)"]
     CT --> IT["Integration Tests<br/>(end-to-end flows)"]
 
     style FM fill:#e8f5e9
@@ -1057,14 +1056,14 @@ graph BT
 |-------|---------------|----------|
 | **Formal models** | State machine correctness, safety/liveness | `openspec/specs/instance-lifecycle/spec.md` (Alloy) |
 | **Property-based tests** | Invariants over generated inputs (alias tracking, config round-trip, EC2 lifecycle) | `test/property/` |
-| **Contract tests** | Spec requirement traceability (`[SPEC-ID]` markers) | `test/contract/` |
+| **Unit / contract tests** | Spec requirement traceability (`[SPEC-ID]` markers) | `test/contract/` |
 | **Integration tests** | End-to-end command flows, adapter behavior, build artifacts | `test/integration/` |
 
-**Spec traceability:** Every testable requirement in `openspec/specs/` carries a bracketed identifier (e.g., `[ALIAS-FORMAT]`). Contract tests reference these identifiers via `traceSpec(...)`, and the traceability tooling validates coverage.
+**Spec traceability:** Every testable requirement in `openspec/specs/` carries a bracketed identifier (e.g., `[ALIAS-FORMAT]`). Contract and unit tests reference these identifiers via `traceSpec(...)`, and the traceability tooling validates coverage.
 
 Evidence layers in detail:
 
-- contract tests for stdout, stderr, exit codes, config parsing, output contracts, and command-specific rules
+- unit / contract tests for stdout, stderr, exit codes, config parsing, output contracts, and command-specific rules
 - property-based tests for alias/current integrity, lifecycle state machines, remote-path acceptance, and other invariants
 - integration tests for command flows, adapter boundaries, polling behavior, cleanup paths, and consistency-error handling
 - distribution checks for package and bundle parity

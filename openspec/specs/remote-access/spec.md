@@ -129,6 +129,8 @@ result.ok; //=> false
 result.error.category; //=> ValidationError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- CLI precondition: current box required ---
 
@@ -207,6 +209,8 @@ IF the current instance is not `running` or does not become SSM-ready within 2 m
 ##### Evidence
 - Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ec2-wait.ts:186 waitForSsmOnline()](/src/domain/ec2-wait.ts#L186)
 - Test: [remote-access.integration.test.ts:104 rejects non-running instances before SSM polling or key staging](/test/integration/remote-access.integration.test.ts#L104), [remote-access.integration.test.ts:127 propagates SSM readiness timeout before key staging](/test/integration/remote-access.integration.test.ts#L127), [ec2-wait.integration.test.ts:134 returns timeout error when getStatus never returns Online](/test/integration/ec2-wait.integration.test.ts#L134)
+
+#### Requirement model
 
 ```alloy
 // --- Precondition checking: running + SSM ready within 2 minutes ---
@@ -405,6 +409,8 @@ result.ok; //=> false
 result.error.category; //=> ValidationError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- SSH user resolution: precedence function ---
 
@@ -455,6 +461,8 @@ IF `connect` succeeds in starting the remote session but the subsequent config c
 ##### Evidence
 - Implementation: [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80)
 - Test (integration): [remote-commands.integration.test.ts:120 connect reports consistency error when commit fails after session success](/test/integration/remote-commands.integration.test.ts#L120)
+
+#### Requirement model
 
 ```alloy
 // --- Connect session: transport + lastConnectAt update ---
@@ -550,6 +558,8 @@ IF `cp` completes remote transfer and finalization successfully but the subseque
 ##### Evidence
 - Implementation: [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
 - Test (integration): [remote-commands.integration.test.ts:197 cp reports consistency error when commit fails after remote success](/test/integration/remote-commands.integration.test.ts#L197)
+
+#### Requirement model
 
 ```alloy
 // --- Copy transport: temp-upload + atomic move ---
@@ -686,6 +696,8 @@ result.ok; //=> false
 result.error.category; //=> ValidationError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Remote path validation: safety gate ---
 
@@ -752,6 +764,8 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 - Implementation: [ssh-cli.ts:402 startInteractiveSsh()](/src/adapters/ssh-cli.ts#L402), [connect.ts:80 runConnectCommand()](/src/cli/commands/connect.ts#L80)
 - Test (integration): [remote-commands.integration.test.ts:106 connect propagates ssh child exit code](/test/integration/remote-commands.integration.test.ts#L106)
 
+#### Requirement model
+
 ```alloy
 // --- Session lifecycle: exit code propagation ---
 
@@ -794,6 +808,8 @@ const result = await validateLocalRegularFile(path); //=> type Object
 await unlink(path);
 result.ok; //=> true
 ```
+
+#### Requirement model
 
 ```alloy
 // --- File size: no artificial limit ---
@@ -842,6 +858,8 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 ##### Evidence
 - Implementation: [remote-access.ts:106 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L106), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
 - Test: [ssh-cli.contract.test.ts:101 reports transport error when key staging command fails](/test/contract/ssh-cli.contract.test.ts#L101)
+
+#### Requirement model
 
 ```alloy
 // --- Key staging: staging must complete before transport ---
@@ -933,6 +951,8 @@ IF best-effort cleanup cannot be completed during a local failure path, THEN THE
 - Implementation: [connect.ts:126 runConnectCommand()](/src/cli/commands/connect.ts#L126), [cp.ts:170 runCpCommand()](/src/cli/commands/cp.ts#L170), [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
 - Test (integration): [remote-commands.integration.test.ts:152 connect preserves transport error when cleanup also fails](/test/integration/remote-commands.integration.test.ts#L152)
 
+#### Requirement model
+
 ```alloy
 // --- Temporary key cleanup: bounded lifetime ---
 
@@ -998,6 +1018,8 @@ WHEN a temporary SSH public key is staged on the remote instance, THE devbox ada
 ##### Evidence
 - Implementation: [ssh-cli.ts:313 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L313)
 - Test: [ssh-cli.contract.test.ts:83 stages temporary key via SSM with bounded remote cleanup command](/test/contract/ssh-cli.contract.test.ts#L83)
+
+#### Requirement model
 
 ```alloy
 // --- Key storage: agent preference and temp-key lifecycle ---

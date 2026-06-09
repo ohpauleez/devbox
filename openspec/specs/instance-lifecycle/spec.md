@@ -84,6 +84,8 @@ WHEN `up` or `down` succeeds, THE devbox CLI SHALL print the targeted instance I
 - Implementation: [up.ts:172 runUpCommand()](/src/cli/commands/up.ts#L172), [down.ts:114 runDownCommand()](/src/cli/commands/down.ts#L114)
 - Test (integration): [lifecycle-commands.integration.test.ts:84 up from stopped sends start request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L84), [lifecycle-commands.integration.test.ts:103 up from stopping waits, starts once, and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L103), [lifecycle-commands.integration.test.ts:124 down from running sends stop request and prints instance id](/test/integration/lifecycle-commands.integration.test.ts#L124)
 
+#### Requirement model
+
 ```alloy
 // --- Precondition: current box must be selected ---
 
@@ -141,6 +143,8 @@ IF a tracked instance is not describable in the active AWS account or region, TH
 ##### Evidence
 - Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
 - Test (integration): [lifecycle-commands.integration.test.ts:143 up returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L143), [lifecycle-commands.integration.test.ts:158 down returns not-found for stale current instance](/test/integration/lifecycle-commands.integration.test.ts#L158)
+
+#### Requirement model
 
 ```alloy
 // --- Active context scoping: describability determines reachability ---
@@ -214,6 +218,8 @@ const result = decideUpAction("terminated"); //=> type Object
 result.ok; //=> false
 result.error.category; //=> InstanceStateError
 ```
+
+#### Requirement model
 
 ```alloy
 // --- Up command state machine ---
@@ -388,6 +394,8 @@ result.ok; //=> false
 result.error.category; //=> InstanceStateError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Down command state machine ---
 
@@ -515,6 +523,8 @@ WHEN the current tracked instance is describable in the active AWS account and r
 ##### Evidence
 - Implementation: [up.ts:94 runUpCommand()](/src/cli/commands/up.ts#L94), [down.ts:84 runDownCommand()](/src/cli/commands/down.ts#L84), [aws-cli.ts:266 describeInstance()](/src/adapters/aws-cli.ts#L266)
 - Test (integration): [lifecycle-commands.integration.test.ts:173 up continues when current instance is describable in active context](/test/integration/lifecycle-commands.integration.test.ts#L173)
+
+#### Requirement model
 
 ```alloy
 // --- Stale resource handling ---
@@ -680,6 +690,8 @@ IF SIGINT or SIGTERM is received during EC2 state polling, THEN THE devbox adapt
 ##### Evidence
 - Implementation: [ec2-wait.ts:7 createPollingAbortSignal()](/src/domain/ec2-wait.ts#L7), [ec2-wait.ts:131 waitForEc2TargetState()](/src/domain/ec2-wait.ts#L131)
 - Test (integration): [ec2-wait.integration.test.ts:72 aborts polling promptly when SIGINT is received](/test/integration/ec2-wait.integration.test.ts#L72)
+
+#### Requirement model
 
 ```alloy
 // --- Bounded polling: tick-based state observation loop ---

@@ -89,6 +89,8 @@ IF a registry command that requires an existing alias is invoked for an alias no
 - Implementation: [switch.ts:18 runSwitchCommand()](/src/cli/commands/switch.ts#L18), [rm.ts:32 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L32), [rm.ts:82 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L82)
 - Test (integration): [registry-commands.integration.test.ts:126 switch fails for missing alias without mutating current](/test/integration/registry-commands.integration.test.ts#L126)
 
+#### Requirement model
+
 ```alloy
 // --- List and missing-alias rejection ---
 
@@ -169,6 +171,8 @@ WHEN the user invokes `devbox` with no arguments, THE devbox CLI SHALL behave as
 - Implementation: [index.ts:133 parseInvocation()](/src/index.ts#L133), [index.ts:237 dispatch()](/src/index.ts#L237), [list.ts:23 runListCommand()](/src/cli/commands/list.ts#L23)
 - Test (integration): [distribution.integration.test.ts:121 no-arg invocation matches list behavior across distribution forms](/test/integration/distribution.integration.test.ts#L121)
 
+#### Requirement model
+
 ```alloy
 // --- Informational commands: pure output, no side effects ---
 
@@ -236,6 +240,8 @@ const output = renderNoBoxesTracked(); //=> type Object
 output.stdoutLines.length; //=> 1
 output.stdoutLines[0]; //=> No boxes tracked
 ```
+
+#### Requirement model
 
 ```alloy
 // --- List command: read-only enrichment with graceful degradation ---
@@ -329,6 +335,8 @@ result.ok; //=> false
 result.error.category; //=> ConfigError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Core invariant: `current` always references an existing tracked alias ---
 
@@ -386,6 +394,8 @@ invalid.ok; //=> false
 const duplicate = ensureAliasAvailable("mybox", { mybox: { instanceId: "i-12345678" } }); //=> type Object
 duplicate.ok; //=> false
 ```
+
+#### Requirement model
 
 ```alloy
 // --- Alias validation: uniqueness within registry ---
@@ -466,6 +476,8 @@ result.ok; //=> false
 result.error.category; //=> ConfigError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Config model: well-formedness predicate ---
 
@@ -545,6 +557,8 @@ result.ok; //=> false
 result.error.category; //=> ValidationError
 ```
 
+#### Requirement model
+
 ```alloy
 // --- SSH user resolution: precedence model ---
 
@@ -598,6 +612,8 @@ IF the supplied instance ID cannot be described in the active account and region
 - Implementation: [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21)
 - Test (integration): [registry-commands.integration.test.ts:112 add fails when instance is not describable](/test/integration/registry-commands.integration.test.ts#L112)
 
+#### Requirement model
+
 ```alloy
 // --- Instance ID acceptance: AWS describability is authoritative ---
 
@@ -643,6 +659,8 @@ IF `init` successfully launches the AWS instance but the subsequent local config
 ##### Evidence
 - Implementation: [init.ts:151 runInitCommand()](/src/cli/commands/init.ts#L151)
 - Test (integration): [registry-commands.integration.test.ts:160 init reports consistency error when launch succeeds but commit fails](/test/integration/registry-commands.integration.test.ts#L160)
+
+#### Requirement model
 
 ```alloy
 // --- Init command: launch + track ---
@@ -754,6 +772,8 @@ IF `add` cannot validate the alias or cannot confirm the instance in the active 
 - Implementation: [add.ts:21 runAddCommand()](/src/cli/commands/add.ts#L21), [alias.ts:35 parseAlias()](/src/domain/alias.ts#L35), [alias.ts:71 ensureAliasAvailable()](/src/domain/alias.ts#L71)
 - Test (integration): [registry-commands.integration.test.ts:112 add fails when instance is not describable](/test/integration/registry-commands.integration.test.ts#L112)
 
+#### Requirement model
+
 ```alloy
 // --- Add command: track existing instance ---
 
@@ -825,6 +845,8 @@ IF `rm --terminate` receives accepted termination or already-absent handling fro
 ##### Evidence
 - Implementation: [rm.ts:82 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L82)
 - Test (integration): [registry-commands.integration.test.ts:183 terminate remove reports consistency error when AWS accepts termination but commit fails](/test/integration/registry-commands.integration.test.ts#L183)
+
+#### Requirement model
 
 ```alloy
 // --- Remove command: local-only and `EC2 terminate` variants ---
@@ -923,6 +945,8 @@ IF the user invokes `switch` for an alias that is not tracked, THEN THE devbox d
 - Implementation: [switch.ts:18 runSwitchCommand()](/src/cli/commands/switch.ts#L18)
 - Test (integration): [registry-commands.integration.test.ts:126 switch fails for missing alias without mutating current](/test/integration/registry-commands.integration.test.ts#L126)
 
+#### Requirement model
+
 ```alloy
 // --- Switch command: local pointer update ---
 
@@ -990,6 +1014,8 @@ WHEN `rm <alias>` removes the alias that is also `current`, THE devbox domain SH
 ##### Evidence
 - Implementation: [rm.ts:47 runLocalRemoveCommand()](/src/cli/commands/rm.ts#L47), [rm.ts:103 runTerminateRemoveCommand()](/src/cli/commands/rm.ts#L103)
 - Test (integration): [command-flows.integration.test.ts:156 rm of current alias clears current](/test/integration/command-flows.integration.test.ts#L156)
+
+#### Requirement model
 
 ```alloy
 // --- Remove clears current: no auto-reassignment ---
@@ -1092,6 +1118,8 @@ const result = mapInitTemplateToRunInstances("box", { SecurityGroups: ["default"
 result.ok; //=> true
 result.value.payload.SecurityGroups[0]; //=> default
 ```
+
+#### Requirement model
 
 ```alloy
 // --- Template validation: structural constraints on init input ---
@@ -1209,6 +1237,8 @@ volumeSpec.Tags[0].Key; //=> Backup
 volumeSpec.Tags[0].Value; //=> true
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Tag merge: precedence model ---
 // Tags are modeled as key-value pairs; merge applies override semantics.
@@ -1267,6 +1297,8 @@ const { mapInitTemplateToRunInstances } = await import("./src/domain/init-mapper
 const result = mapInitTemplateToRunInstances("box", { UserData: "file:setup.sh" }, { tags: { env: "dev", service: "devbox", version: "0000000", "customer-data": "false", team: "devbox" }, ImageId: "ami-default", IamInstanceProfile: { Arn: "arn:aws:iam::123:instance-profile/default" } }); //=> type Object
 result.value.payload.UserData; //=> file:setup.sh
 ```
+
+#### Requirement model
 
 ```alloy
 // --- UserData pass-through: identity preservation ---
@@ -1334,6 +1366,8 @@ result.ok; //=> false
 result.error.message.includes("IamInstanceProfile"); //=> true
 ```
 
+#### Requirement model
+
 ```alloy
 // --- Config creation policy: required launch values ---
 
@@ -1383,6 +1417,8 @@ WHEN the enrichment batch fails because AWS is unreachable or the `aws` executab
 - Implementation: [list.ts:39 runListCommand()](/src/cli/commands/list.ts#L39)
 - Test (integration): [command-flows.integration.test.ts:108 list degrades gracefully to unknown state when AWS enrichment fails](/test/integration/command-flows.integration.test.ts#L108)
 
+#### Requirement model
+
 ```alloy
 // --- List graceful degradation ---
 // List always succeeds regardless of AWS enrichment outcome.
@@ -1428,6 +1464,8 @@ IF the advisory lock is held by a live, recent process and is not stale, THEN TH
 ##### Evidence
 - Implementation: [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
 - Test (integration): [config-store.integration.test.ts:134 concurrent commitConfig with active lock returns lock-held error](/test/integration/config-store.integration.test.ts#L134)
+
+#### Requirement model
 
 ```alloy
 // --- Atomic config mutation: single-writer lock protocol ---
@@ -1550,6 +1588,8 @@ WHEN the lock file contains a valid PID of a running process and the mtime is wi
 ##### Evidence
 - Implementation: [config-store.ts:143 isLockStale()](/src/adapters/config-store.ts#L143), [config-store.ts:206 acquireLock()](/src/adapters/config-store.ts#L206)
 - Test (integration): [config-store.integration.test.ts:134 concurrent commitConfig with active lock returns lock-held error](/test/integration/config-store.integration.test.ts#L134)
+
+#### Requirement model
 
 ```alloy
 // --- Stale lock recovery protocol ---

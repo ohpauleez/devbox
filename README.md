@@ -28,7 +28,7 @@ For the full design rationale, see [docs/design.md](docs/design.md).
 Runtime requirements:
 - Node.js `>= 20` ([package.json](package.json))
 - `npm`
-- AWS CLI configured outside `devbox`
+- AWS CLI (`aws`) configured outside `devbox`
 - `ssh`, `scp`, and either `ssh-agent` or `ssh-keygen` for remote access
 
 Notes:
@@ -52,7 +52,7 @@ devbox [command]
 
 | Command | Purpose |
 |---|---|
-| `devbox [-v | --version | -h | --help]` | List info or tracked boxes if arg-less|
+| `devbox [-v \| --version \| -h \| --help]` | List info or tracked boxes if arg-less|
 | `devbox list` | List tracked boxes |
 | `devbox init <alias> <template-file>` | Launch and track a new instance |
 | `devbox add <instance-id> <alias>` | Track an existing instance |

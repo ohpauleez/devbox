@@ -113,14 +113,13 @@ export async function resolveRemoteAccessPreconditions(
   }
 
   // Step 2: Resolve the current box alias → instance mapping.
-  // Why: we need an instance ID before we can query AWS.
   const currentResult = resolveCurrentBox(configResult.value);
   if (!currentResult.ok) {
     return err(currentResult.error);
   }
 
   // Step 3: Resolve the SSH user from the layered config hierarchy.
-  // Why: the SSH user determines the remote authorized_keys target and must be
+  // The SSH user determines the remote authorized_keys target and must be
   // resolved before we interact with the instance (used in key staging).
   const sshUserResult = resolveSshUser({
     box: currentResult.value.box,
@@ -132,8 +131,6 @@ export async function resolveRemoteAccessPreconditions(
   }
 
   // Step 4: Describe the instance to confirm it exists and get current state.
-  // Why: starting SSH against a terminated or non-existent instance wastes time
-  // and produces confusing errors; we fail fast with a clear message instead.
   const instanceResult = await describeInstance(currentResult.value.box.instanceId);
   if (!instanceResult.ok) {
     return err(instanceResult.error);
@@ -143,7 +140,7 @@ export async function resolveRemoteAccessPreconditions(
   }
 
   // Step 5: Wait for SSM agent to be online.
-  // Why: even a "running" instance may not have SSM ready yet (e.g., just started).
+  // A "running" instance may not have SSM ready yet (e.g., just started).
   // Key staging uses SSM SendCommand, so SSM must be responsive first.
   const ssmWaitResult = await waitForSsmOnline(() =>
     describeSsmPingStatus(instanceResult.value.instanceId),
@@ -153,8 +150,7 @@ export async function resolveRemoteAccessPreconditions(
   }
 
   // Step 6: Ensure local SSH key material exists (generate if needed).
-  // Why: we need a public key to stage on the remote. This must happen before
-  // staging so we have the key content to push.
+  // A public key needs to be staged/added on the remote; this check ensures we have pub key content to push
   const keyResult = await ensureSshKeyMaterial();
   if (!keyResult.ok) {
     return err(keyResult.error);
@@ -166,7 +162,7 @@ export async function resolveRemoteAccessPreconditions(
   };
 
   // Step 7: Stage the public key on the remote instance via SSM.
-  // Why: this is the final precondition — after this, SSH transport can proceed
+  // This is the final precondition — after this, SSH transport can proceed
   // because the remote authorized_keys file contains our ephemeral public key.
   const stageResult = await stageTemporarySshKey(sshContext, keyResult.value);
   if (!stageResult.ok) {

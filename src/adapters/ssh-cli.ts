@@ -31,7 +31,7 @@
 
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { stat, unlink } from "node:fs/promises";
+import { readFile, stat, unlink } from "node:fs/promises";
 import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -73,10 +73,16 @@ export interface SshContext {
  * When `fromAgent` is true, `privateKeyPath` and `publicKeyPath` are empty strings
  * (the agent provides keys transparently). When false, both paths reference temporary
  * files that must be cleaned up via {@link cleanupLocalTempKeys}.
+ *
+ * `publicKeyContent` always holds the actual public key string (e.g. "ssh-rsa AAAA... comment")
+ * read from the local machine. This content is what gets staged on the remote host —
+ * it must never be obtained remotely because neither the local agent nor local files
+ * are accessible on the target instance.
  */
 export interface StagedKey {
   readonly privateKeyPath: string;
   readonly publicKeyPath: string;
+  readonly publicKeyContent: string;
   readonly fromAgent: boolean;
 }
 
@@ -193,16 +199,25 @@ export async function validateLocalRegularFile(filePath: string): Promise<Result
 /**
  * Select SSH key source from a running ssh-agent or generate a unique temporary key pair.
  *
+ * In both paths, the public key content is read locally and stored in the returned
+ * `StagedKey.publicKeyContent`. This is critical: the key content must be available
+ * as a string so it can be embedded literally in the remote staging command. Reading
+ * the key on the remote host would fail because neither the local agent nor local
+ * key files are accessible there.
+ *
  * @returns On success (`ok`): a `StagedKey` describing available key material.
- *   When `fromAgent` is true, an ssh-agent with at least one loaded key was found.
- *   When `fromAgent` is false, a new RSA key pair was generated at unique temp paths
- *   and registered for signal-based cleanup.
+ *   When `fromAgent` is true, an ssh-agent with at least one loaded key was found
+ *   and `publicKeyContent` holds the first public key from the agent.
+ *   When `fromAgent` is false, a new RSA key pair was generated at unique temp paths,
+ *   `publicKeyContent` holds the generated public key content, and the private key
+ *   is registered for signal-based cleanup.
  *   On error (`err`): `DependencyError` when `ssh-keygen` is not found;
- *   `TransportError` when key generation fails.
+ *   `TransportError` when key generation or public key reading fails.
  *
  * @remarks
  * Precondition: either `ssh-add` or `ssh-keygen` must be available on `$PATH`.
- * Postcondition: on success, key material is available for SSH authentication.
+ * Postcondition: on success, key material is available for SSH authentication and
+ *   `publicKeyContent` is a non-empty string containing the public key.
  *   If a temp key was generated, it is registered for cleanup on SIGINT/SIGTERM.
  * Safety: uses unique per-invocation paths (PID + UUID) to prevent multi-session collisions.
  * Concurrency: safe to call concurrently; each call generates independent key paths.
@@ -213,6 +228,8 @@ export async function validateLocalRegularFile(filePath: string): Promise<Result
  * ```ts
  * const keyResult = await ensureSshKeyMaterial();
  * if (keyResult.ok) {
+ *   // publicKeyContent is always available for remote staging
+ *   console.log(`Public key: ${keyResult.value.publicKeyContent}`);
  *   if (keyResult.value.fromAgent) {
  *     console.log("Using ssh-agent keys");
  *   } else {
@@ -224,9 +241,21 @@ export async function validateLocalRegularFile(filePath: string): Promise<Result
 export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTransportError>> {
   const agentResult = await runProcess("ssh-add", ["-l"]);
   if (agentResult.ok) {
+    // Agent has keys — read the actual public key content locally via `ssh-add -L`.
+    // This must happen here because the remote host has no access to our local agent.
+    const pubKeyResult = await runProcess("ssh-add", ["-L"]);
+    if (!pubKeyResult.ok) {
+      return err(makeTypedError("TransportError", "failed to read public key from ssh-agent"));
+    }
+    // Take the first key line; ssh-add -L outputs one key per line.
+    const firstKey = pubKeyResult.value.stdout.split("\n")[0]?.trim() ?? "";
+    if (firstKey.length === 0) {
+      return err(makeTypedError("TransportError", "ssh-agent reported keys but produced no public key output"));
+    }
     return ok({
       privateKeyPath: "",
       publicKeyPath: "",
+      publicKeyContent: firstKey,
       fromAgent: true,
     });
   }
@@ -256,6 +285,19 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTr
     return err(makeTypedError("TransportError", "failed to generate temporary ssh key", keygenResult.error.details));
   }
 
+  // Read the generated public key content from disk before returning.
+  // This content will be embedded literally in the remote staging command.
+  let publicKeyContent: string;
+  try {
+    publicKeyContent = (await readFile(tempKeyPublicPath, "utf8")).trim();
+  } catch {
+    return err(makeTypedError("TransportError", "failed to read generated public key file"));
+  }
+
+  if (publicKeyContent.length === 0) {
+    return err(makeTypedError("TransportError", "generated public key file is empty"));
+  }
+
   // Register for signal-based cleanup before returning, so interrupted sessions
   // don't leave key material on disk.
   registerForCleanup(tempKeyPath);
@@ -263,6 +305,7 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTr
   return ok({
     privateKeyPath: tempKeyPath,
     publicKeyPath: tempKeyPublicPath,
+    publicKeyContent,
     fromAgent: false,
   });
 }
@@ -271,7 +314,8 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTr
  * Stage temporary SSH public key authorization on the remote instance via AWS SSM send-command.
  *
  * @param context - SSH connection context (instance id and user).
- * @param key - Staged key material to authorize on the remote host.
+ * @param key - Staged key material to authorize on the remote host. The `publicKeyContent`
+ *   field must contain the literal public key string (read locally by `ensureSshKeyMaterial`).
  * @returns On success (`ok`): `undefined` — the SSM command was dispatched.
  *   The key is appended to remote `~/.ssh/authorized_keys` and will auto-expire in 15 seconds.
  *   On error (`err`): `DependencyError` when AWS CLI is missing;
@@ -279,6 +323,7 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTr
  *
  * @remarks
  * Precondition: the instance is running and SSM agent is online.
+ *   `key.publicKeyContent` must be a non-empty string containing the public key.
  * Postcondition: on success, the public key is appended to remote `~/.ssh/authorized_keys`.
  *   A background process on the remote host removes it after 15 seconds.
  *
@@ -287,11 +332,15 @@ export async function ensureSshKeyMaterial(): Promise<Result<StagedKey, RemoteTr
  * The SSM command executes the following sequence on the remote host:
  * 1. Ensure `~/.ssh/` exists with mode 0700 (umask 077 handles new files).
  * 2. Ensure `authorized_keys` exists with mode 0600.
- * 3. Read the public key (from agent output or the staged .pub file).
+ * 3. Set PUB to the literal public key content (embedded via single-quote shell escaping).
  * 4. Append the key only if not already present (idempotent via grep -F).
  * 5. Spawn a background process that sleeps 15 seconds then removes the key.
  *    This limits the authorization window — even if the SSH session never connects,
  *    the key doesn't persist indefinitely.
+ *
+ * The public key is embedded as a literal string in the remote command rather than
+ * being obtained remotely (e.g. via `ssh-add -L`), because the local SSH agent and
+ * local key files are not accessible on the remote host.
  *
  * The 15-second window is sufficient for SSH to complete the handshake.
  * If the connection takes longer to establish, the key may be removed before
@@ -314,20 +363,40 @@ export async function stageTemporarySshKey(
   context: SshContext,
   key: StagedKey,
 ): Promise<Result<void, RemoteTransportError>> {
-  const keySourcePath = key.fromAgent ? "$(ssh-add -L | head -n1)" : `$(cat ${shellQuote(key.publicKeyPath)})`;
+  // Build the remote command that stages the public key in the SSH user's authorized_keys.
+  // SSM RunShellScript executes as root, so we must resolve the target user's home
+  // directory via getent passwd rather than relying on ~ (which would resolve to /root).
+  const quotedUser = shellQuote(context.sshUser);
+  const quotedKey = shellQuote(key.publicKeyContent);
 
   const remoteCommand = [
     "set -eu",
-    "umask 077",
-    "mkdir -p ~/.ssh",
-    `touch ~/.ssh/authorized_keys`,
-    `chmod 600 ~/.ssh/authorized_keys`,
-    `PUB=${keySourcePath}`,
-    "grep -F \"$PUB\" ~/.ssh/authorized_keys >/dev/null 2>&1 || printf '%s\\n' \"$PUB\" >> ~/.ssh/authorized_keys",
-    "(sleep 15; grep -v -F \"$PUB\" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys) >/dev/null 2>&1 &",
+    // Resolve the target user's home directory from the system passwd database.
+    // This works regardless of whether the user has a login shell or uses a custom home.
+    `u=$(getent passwd ${quotedUser}) && x=$(echo $u | cut -d: -f6) || exit 1`,
+    // Ensure ~/.ssh exists with correct ownership and mode.
+    // install -d creates the directory only if missing, sets mode and owner atomically.
+    `[ ! -d \${x}/.ssh ] && install -d -m700 -o${quotedUser} \${x}/.ssh`,
+    "touch ${x}/.ssh/authorized_keys",
+    `chmod 600 \${x}/.ssh/authorized_keys`,
+    `chown ${quotedUser} \${x}/.ssh/authorized_keys`,
+    // Embed the public key as a literal value using shellQuote (single-quote wrapping).
+    // The key content was read locally by ensureSshKeyMaterial — the local agent and
+    // local files are not accessible on the remote host.
+    `PUB=${quotedKey}`,
+    // Append only if not already present (idempotent).
+    "grep -F \"$PUB\" ${x}/.ssh/authorized_keys >/dev/null 2>&1 && exit 0",
+    "printf '%s\\n' \"$PUB\" >> ${x}/.ssh/authorized_keys",
+    // Spawn bounded background cleanup: remove the key after 15 seconds.
+    // This limits the authorization window even if the SSH session never connects.
+    "(sleep 15; grep -v -F \"$PUB\" ${x}/.ssh/authorized_keys > ${x}/.ssh/authorized_keys.tmp && mv ${x}/.ssh/authorized_keys.tmp ${x}/.ssh/authorized_keys) >/dev/null 2>&1 &",
   ].join("; ");
 
-  const result = await runProcess("aws", [
+  // Use JSON format for --parameters to avoid the AWS CLI shorthand parser,
+  // which chokes on embedded quotes and commas in the shell script.
+  // JSON encoding is unambiguous and avoids any injection risk since execFile
+  // passes the argument directly without shell interpolation.
+  const sendResult = await runProcess("aws", [
     "ssm",
     "send-command",
     "--instance-ids",
@@ -337,23 +406,89 @@ export async function stageTemporarySshKey(
     "--comment",
     "devbox temporary ssh key staging",
     "--parameters",
-    `commands=${remoteCommand}`,
+    JSON.stringify({ commands: [remoteCommand] }),
     "--output",
     "json",
   ]);
 
-  if (!result.ok) {
-    switch (result.error.category) {
+  if (!sendResult.ok) {
+    switch (sendResult.error.category) {
       case "DependencyError":
-        return err(result.error);
+        return err(sendResult.error);
       case "TransportError":
         break;
       default:
-        return assertNever(result.error);
+        return assertNever(sendResult.error);
     }
-    return err(makeTypedError("TransportError", "failed to stage temporary SSH key", result.error.details));
+    return err(makeTypedError("TransportError", "failed to stage temporary SSH key", sendResult.error.details));
   }
+
+  // Parse the CommandId from the send-command response so we can wait for execution.
+  // send-command is asynchronous — without waiting, SSH may attempt to connect before
+  // the key has been written to authorized_keys on the remote host.
+  const commandId = extractCommandId(sendResult.value.stdout);
+  if (commandId === undefined) {
+    return err(makeTypedError("TransportError", "failed to parse command id from SSM send-command response"));
+  }
+
+  // Wait for the SSM command to finish executing on the remote host.
+  // The built-in waiter polls every 5s for up to 25 attempts (~125s).
+  // Key staging is a sub-second operation; if this times out something is wrong.
+  const waitResult = await runProcess("aws", [
+    "ssm",
+    "wait",
+    "command-executed",
+    "--instance-id",
+    context.instanceId,
+    "--command-id",
+    commandId,
+  ]);
+
+  if (!waitResult.ok) {
+    switch (waitResult.error.category) {
+      case "DependencyError":
+        return err(waitResult.error);
+      case "TransportError":
+        break;
+      default:
+        return assertNever(waitResult.error);
+    }
+    return err(makeTypedError("TransportError", "SSH key staging command did not complete", waitResult.error.details));
+  }
+
   return ok(undefined);
+}
+
+/**
+ * Extract the CommandId from an `aws ssm send-command` JSON response.
+ *
+ * @param stdout - Raw JSON stdout from the send-command invocation.
+ * @returns The CommandId string, or `undefined` if the response is malformed.
+ *
+ * @remarks
+ * Precondition: `stdout` should be a JSON string from `aws ssm send-command --output json`.
+ * Postcondition: returns a non-empty string CommandId, or undefined on any parse failure.
+ * Safety: parses defensively — invalid JSON or missing fields produce undefined rather than
+ * throwing, so the caller can report a clear TransportError.
+ */
+function extractCommandId(stdout: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== "object" || parsed === null) {
+      return undefined;
+    }
+    const command = (parsed as Record<string, unknown>)["Command"];
+    if (typeof command !== "object" || command === null) {
+      return undefined;
+    }
+    const commandId = (command as Record<string, unknown>)["CommandId"];
+    if (typeof commandId !== "string" || commandId.length === 0) {
+      return undefined;
+    }
+    return commandId;
+  } catch {
+    return undefined;
+  }
 }
 
 function commonSshArgs(context: SshContext, key: StagedKey): string[] {

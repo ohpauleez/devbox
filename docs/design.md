@@ -363,7 +363,8 @@ Stale lock detection uses three criteria:
 
 Relevant code: [`src/domain/init-mapper.ts`](../src/domain/init-mapper.ts)
 
-`init` accepts a launch-template-style JSON object. The supported top-level keys are:
+`init` accepts a launch-template-style JSON object (sent to `aws ec2 run-instances --cli-input-json`).
+The supported top-level keys are:
 
 ```json
 {
@@ -1099,6 +1100,8 @@ Protocol rules:
 
 ### 7.5 `connect` Sequence
 
+This command is similar to the technique used by [ssh-over-ssm](https://github.com/elpy1/ssh-over-ssm).
+
 Relevant specs: [`remote-access`](../openspec/specs/remote-access/spec.md)
 
 Relevant code: [`src/cli/commands/connect.ts`](../src/cli/commands/connect.ts), [`src/cli/remote-access.ts`](../src/cli/remote-access.ts), [`src/adapters/ssh-cli.ts`](../src/adapters/ssh-cli.ts), [`src/adapters/config-store.ts`](../src/adapters/config-store.ts)
@@ -1125,7 +1128,8 @@ sequenceDiagram
     D->>SSH: ensure key material and stage temporary key
     SSH->>EC2: send SSM-backed key staging command
     EC2->>H: install temporary key and cleanup job
-    H-->>SSH: staging complete
+    SSH->>EC2: ssm wait command-executed (bounded)
+    EC2-->>SSH: staging confirmed
     SSH-->>D: transport ready
     D->>SSH: start interactive SSH over SSM
     SSH->>H: establish session

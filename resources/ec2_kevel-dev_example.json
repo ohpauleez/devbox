@@ -1,0 +1,11 @@
+{
+    "NetworkInterfaces": [{
+        "AssociatePublicIpAddress": false,
+        "SubnetId": "subnet-07491a246e265656b",
+        "Groups": [ "sg-0e110355c54b34b31" ],
+        "DeviceIndex" : 0
+    }],
+    "ImageId": "resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id",
+    "InstanceType": "t3.micro",
+    "IamInstanceProfile": { "Arn": "arn:aws:iam::219227175525:instance-profile/AmazonSSMRoleForInstancesQuickSetup" }
+}

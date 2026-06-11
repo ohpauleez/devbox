@@ -60,6 +60,7 @@ describe("remote command integration", () => {
         key: {
           privateKeyPath: "/tmp/key",
           publicKeyPath: "/tmp/key.pub",
+          publicKeyContent: "ssh-rsa AAAAB3...test== user@host",
           fromAgent: false,
         },
       }),

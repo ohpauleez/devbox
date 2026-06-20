@@ -447,7 +447,7 @@ The comment stream should help a careful reader follow the algorithm without rev
 - If a safety property matters, document it in both prose and executable form where possible.
 - If a function has important preconditions or postconditions, prefer expressing them in both TSDoc and executable assertions.
 - If a comment becomes stale, fix or remove it immediately.
-- Public APIs without adequate TSDoc are incomplete.
+- Any APIs without adequate TSDoc are incomplete.
 
 Reason: documentation preserves the mental model required for safe evolution. In a correctness-oriented codebase, TSDoc, examples, and literate comments are not decoration; they are part of the executable engineering record.
 

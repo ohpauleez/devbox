@@ -101,7 +101,7 @@ describe("remote command integration", () => {
 
     const result = await runConnectCommand("ubuntu");
     expect(result.ok).toBe(true);
-    expect(resolveRemoteAccessPreconditionsMock).toHaveBeenCalledWith("ubuntu");
+    expect(resolveRemoteAccessPreconditionsMock).toHaveBeenCalledWith("ubuntu", false);
   });
 
   it("connect propagates ssh child exit code", async () => {

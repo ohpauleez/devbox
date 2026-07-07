@@ -33,6 +33,10 @@ import { resolveRemoteAccessPreconditions } from "../remote-access.js";
  *
  * @param invocationSshUser - Optional invocation-level SSH user override.
  *   When provided, takes precedence over box-level and default-level configuration.
+ * @param forwardAgent - When `true`, request SSH agent forwarding for this session.
+ *   Requires the resolved key material to have come from a local agent; otherwise
+ *   {@link resolveRemoteAccessPreconditions} fails before any AWS/SSM interaction.
+ *   Defaults to `false` (no change from prior behavior).
  * @param clock - Clock abstraction for testability; defaults to real wall-clock time.
  *
  * @returns On success: empty `stdoutLines` with optional non-zero `exitCode` reflecting
@@ -46,6 +50,7 @@ import { resolveRemoteAccessPreconditions } from "../remote-access.js";
  * - A current box must be selected with a valid instance ID.
  * - The instance must be running and SSM-ready.
  * - SSH key material must be available locally (generated if needed).
+ * - If `forwardAgent` is `true`, that key material must come from a local agent.
  *
  * Postconditions on success:
  * - The SSH session has completed (user exited or connection dropped).
@@ -59,7 +64,9 @@ import { resolveRemoteAccessPreconditions } from "../remote-access.js";
  *   from connection failures.
  *
  * Failure forms:
- * - All failures from {@link resolveRemoteAccessPreconditions} (see that function).
+ * - All failures from {@link resolveRemoteAccessPreconditions} (see that function),
+ *   including `ValidationError` when `forwardAgent` is requested without a usable
+ *   local agent.
  * - `TransportError` — SSH session could not be established.
  * - `ConsistencyError` — session succeeded but `lastConnectAt` persistence failed.
  *
@@ -69,7 +76,7 @@ import { resolveRemoteAccessPreconditions } from "../remote-access.js";
  * ```ts
  * import { runConnectCommand } from "./connect.js";
  *
- * const result = await runConnectCommand();
+ * const result = await runConnectCommand(undefined, true);
  * if (!result.ok) {
  *   console.error(result.error.message);
  *   process.exit(1);
@@ -77,9 +84,13 @@ import { resolveRemoteAccessPreconditions } from "../remote-access.js";
  * process.exit(result.value.exitCode ?? 0);
  * ```
  */
-export async function runConnectCommand(invocationSshUser?: string, clock: Clock = REAL_CLOCK): Promise<CommandResult> {
+export async function runConnectCommand(
+  invocationSshUser?: string,
+  forwardAgent = false,
+  clock: Clock = REAL_CLOCK,
+): Promise<CommandResult> {
   // Resolve all remote-access preconditions: config, instance state, SSM, key staging.
-  const preconditionResult = await resolveRemoteAccessPreconditions(invocationSshUser);
+  const preconditionResult = await resolveRemoteAccessPreconditions(invocationSshUser, forwardAgent);
   if (!preconditionResult.ok) {
     return err(preconditionResult.error);
   }
@@ -88,7 +99,7 @@ export async function runConnectCommand(invocationSshUser?: string, clock: Clock
 
   try {
     // Start the interactive SSH session. This blocks until the user exits.
-    const sshStartResult = await startInteractiveSsh(sshContext, key);
+    const sshStartResult = await startInteractiveSsh(sshContext, key, forwardAgent);
     if (!sshStartResult.ok) {
       return err(sshStartResult.error);
     }

@@ -25,6 +25,8 @@
  * dependency graphs and editor discoverability over cold-start latency.
  */
 
+import { pathToFileURL } from "node:url";
+
 import { runAddCommand } from "./cli/commands/add.js";
 import { runConnectCommand } from "./cli/commands/connect.js";
 import { runCpCommand } from "./cli/commands/cp.js";
@@ -57,7 +59,7 @@ type Invocation =
   | { readonly kind: "add"; readonly instanceId: string; readonly alias: string }
   | { readonly kind: "up" }
   | { readonly kind: "down" }
-  | { readonly kind: "connect"; readonly sshUserOverride?: string }
+  | { readonly kind: "connect"; readonly sshUserOverride?: string; readonly forwardAgent?: boolean }
   | {
       readonly kind: "cp";
       readonly localPath: string;
@@ -92,6 +94,36 @@ function parseOptionalSshUser(args: readonly string[]): { readonly sshUserOverri
   }
   return {
     rest: args,
+  };
+}
+
+/**
+ * Extracts an optional `--forward-agent` boolean flag from anywhere in an argument list.
+ *
+ * @param args - Remaining CLI arguments after the subcommand.
+ * @returns Whether the flag was present, and the argument list with it removed.
+ *
+ * @remarks
+ * Precondition: `args` is the slice of argv following the subcommand token.
+ * Postcondition: If `--forward-agent` is present, exactly one occurrence is removed
+ *   from `rest`, preserving the relative order of remaining tokens. Otherwise
+ *   `rest === args` and `forwardAgent` is `false`.
+ * Invariant: Never mutates the input array.
+ * Never throws.
+ *
+ * @remarks
+ * `connect` is currently the only command exposing this flag; `cp` does not call
+ * this function, so `--forward-agent` passed to `cp` falls through as an
+ * unconsumed argument and triggers the existing usage error.
+ */
+function extractForwardAgentFlag(args: readonly string[]): { readonly forwardAgent: boolean; readonly rest: readonly string[] } {
+  const index = args.indexOf("--forward-agent");
+  if (index === -1) {
+    return { forwardAgent: false, rest: args };
+  }
+  return {
+    forwardAgent: true,
+    rest: [...args.slice(0, index), ...args.slice(index + 1)],
   };
 }
 
@@ -182,13 +214,15 @@ function parseInvocation(argv: readonly string[]): Invocation {
         : { kind: "invalid", message: "usage: devbox down" };
     case "connect":
       {
-        const parsed = parseOptionalSshUser(rest);
+        const { forwardAgent, rest: withoutForwardAgent } = extractForwardAgentFlag(rest);
+        const parsed = parseOptionalSshUser(withoutForwardAgent);
         if (parsed.rest.length !== 0) {
-          return { kind: "invalid", message: "usage: devbox connect [--ssh-user <user>]" };
+          return { kind: "invalid", message: "usage: devbox connect [--ssh-user <user>] [--forward-agent]" };
         }
         return {
           kind: "connect",
           ...(parsed.sshUserOverride !== undefined ? { sshUserOverride: parsed.sshUserOverride } : {}),
+          ...(forwardAgent ? { forwardAgent: true } : {}),
         };
       }
     case "cp": {
@@ -287,7 +321,7 @@ async function dispatch(invocation: ExecutableInvocation, version: string): Prom
       commandResultPromise = runDownCommand();
       break;
     case "connect":
-      commandResultPromise = runConnectCommand(invocation.sshUserOverride);
+      commandResultPromise = runConnectCommand(invocation.sshUserOverride, invocation.forwardAgent);
       break;
     case "cp":
       commandResultPromise = runCpCommand(
@@ -360,7 +394,14 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   return dispatch(invocation, versionResult.value);
 }
 
-// Fire-and-forget the CLI, mapping the resolved exit code onto the process.
-void runCli(process.argv.slice(2)).then((exitCode) => {
-  process.exitCode = exitCode;
-});
+// Only self-invoke when this module is the actual process entrypoint (`node index.js ...`
+// or the bundled `devbox` binary) — not when imported as a module (e.g. `runCli` used
+// directly in tests). Without this guard, merely importing this file for its exports
+// would trigger a real CLI run against the actual environment.
+const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  // Fire-and-forget the CLI, mapping the resolved exit code onto the process.
+  void runCli(process.argv.slice(2)).then((exitCode) => {
+    process.exitCode = exitCode;
+  });
+}

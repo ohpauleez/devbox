@@ -8,14 +8,19 @@
  * 1. Load configuration (establishes local state is valid)
  * 2. Resolve current box alias (ensures a target is selected)
  * 3. Resolve SSH user (merges defaults, box config, and invocation override)
- * 4. Describe instance (verifies instance exists in AWS)
- * 5. Verify running state (transport requires a running instance)
- * 6. Wait for SSM online (SSH-over-SSM requires the agent to be responsive)
- * 7. Ensure SSH key material (local key pair must exist)
- * 8. Stage temporary SSH key (push public key via SSM for short-lived access)
+ * 4. Ensure SSH key material (local key pair must exist)
+ * 5. If agent forwarding was requested, require that the key material came from a local agent
+ * 6. Describe instance (verifies instance exists in AWS)
+ * 7. Verify running state (transport requires a running instance)
+ * 8. Wait for SSM online (SSH-over-SSM requires the agent to be responsive)
+ * 9. Stage temporary SSH key (push public key via SSM for short-lived access)
  *
  * Each step depends on the output of the previous step, enforcing a strict
  * sequential ordering. Failure at any point short-circuits with a typed error.
+ *
+ * Key-material resolution (step 4) runs before any AWS/SSM interaction (steps 6-9)
+ * specifically so that an unsatisfiable agent-forwarding request (step 5) fails
+ * without any AWS call — no instance description, no SSM wait, no key staged.
  *
  * @example
  * ```ts
@@ -55,11 +60,18 @@ export interface RemoteAccessContext {
 
 /**
  * Execute the shared remote-access precondition chain:
- * load config → resolve current → resolve SSH user → describe instance →
- * verify running state → wait SSM online → ensure key material → stage key.
+ * load config → resolve current → resolve SSH user → ensure key material →
+ * (optionally) require agent-sourced key → describe instance →
+ * verify running state → wait SSM online → stage key.
  *
  * @param invocationSshUser - Optional CLI-level SSH user override. When provided,
  *   takes precedence over box-level and default-level SSH user configuration.
+ * @param forwardAgent - Whether the caller intends to forward the local SSH agent
+ *   to the remote session (`connect` only; `cp` always omits this). When `true`,
+ *   the resolved key material must have come from a local agent, or this function
+ *   fails before any AWS/SSM interaction. Does not itself change which key
+ *   authenticates the SSM-tunneled hop — that remains governed entirely by
+ *   {@link ensureSshKeyMaterial}'s own agent-preference logic.
  *
  * @returns On success: a {@link RemoteAccessContext} with all fields populated and
  *   the instance confirmed running with a staged SSH key. On error: a typed
@@ -75,13 +87,15 @@ export interface RemoteAccessContext {
  * - Instance is confirmed in "running" state.
  * - SSM agent is online and responsive.
  * - SSH public key is staged on the remote instance (time-limited).
+ * - If `forwardAgent` was `true`, the resolved key material came from a local agent.
  *
  * Invariants: no side-effects occur if any step fails (each step is checked
  * before proceeding to the next).
  *
  * Failure forms:
  * - `ConfigError` — config file missing or malformed.
- * - `ValidationError` — no current box set, or invalid SSH user override.
+ * - `ValidationError` — no current box set, invalid SSH user override, or
+ *   `forwardAgent` requested without a usable local agent.
  * - `NotFoundError` — instance does not exist in AWS.
  * - `InstanceStateError` — instance is not in "running" state.
  * - `TimeoutError` — SSM agent did not come online within polling budget.
@@ -105,6 +119,7 @@ export interface RemoteAccessContext {
  */
 export async function resolveRemoteAccessPreconditions(
   invocationSshUser?: string,
+  forwardAgent = false,
 ): Promise<Result<RemoteAccessContext, RemoteAccessPreconditionError>> {
   // Step 1: Load config — all subsequent steps depend on having valid local state.
   const configResult = await loadConfig();
@@ -130,7 +145,31 @@ export async function resolveRemoteAccessPreconditions(
     return err(sshUserResult.error);
   }
 
-  // Step 4: Describe the instance to confirm it exists and get current state.
+  // Step 4: Ensure local SSH key material exists (generate if needed).
+  // A public key needs to be staged/added on the remote; this check ensures we have pub key content to push.
+  // This runs before any AWS/SSM interaction because it is purely local and, when agent
+  // forwarding is requested, its result (`fromAgent`) gates whether we should proceed at all —
+  // see the next step. Running it here (rather than after the AWS calls) lets an unsatisfiable
+  // forwarding request fail before any instance description, SSM wait, or key staging occurs.
+  const keyResult = await ensureSshKeyMaterial();
+  if (!keyResult.ok) {
+    return err(keyResult.error);
+  }
+
+  // Step 5: If agent forwarding was requested, require that the key material we just resolved
+  // actually came from a local agent. `fromAgent` reuses the same `ssh-add -l` check that decided
+  // hop-authentication key selection — forwarding a request through to `ssh -A` when no agent
+  // (or an empty agent) is present would silently connect without functioning forwarding.
+  if (forwardAgent && !keyResult.value.fromAgent) {
+    return err(
+      makeTypedError(
+        "ValidationError",
+        "agent forwarding requested but no local ssh-agent with a loaded identity is available; start ssh-agent and run ssh-add, or omit --forward-agent",
+      ),
+    );
+  }
+
+  // Step 6: Describe the instance to confirm it exists and get current state.
   const instanceResult = await describeInstance(currentResult.value.box.instanceId);
   if (!instanceResult.ok) {
     return err(instanceResult.error);
@@ -139,7 +178,7 @@ export async function resolveRemoteAccessPreconditions(
     return err(makeTypedError("InstanceStateError", `remote access requires running instance (found ${instanceResult.value.state})`));
   }
 
-  // Step 5: Wait for SSM agent to be online.
+  // Step 7: Wait for SSM agent to be online.
   // A "running" instance may not have SSM ready yet (e.g., just started).
   // Key staging uses SSM SendCommand, so SSM must be responsive first.
   const ssmWaitResult = await waitForSsmOnline(() =>
@@ -149,19 +188,12 @@ export async function resolveRemoteAccessPreconditions(
     return err(ssmWaitResult.error);
   }
 
-  // Step 6: Ensure local SSH key material exists (generate if needed).
-  // A public key needs to be staged/added on the remote; this check ensures we have pub key content to push
-  const keyResult = await ensureSshKeyMaterial();
-  if (!keyResult.ok) {
-    return err(keyResult.error);
-  }
-
   const sshContext: SshContext = {
     instanceId: instanceResult.value.instanceId,
     sshUser: sshUserResult.value,
   };
 
-  // Step 7: Stage the public key on the remote instance via SSM.
+  // Step 8: Stage the public key on the remote instance via SSM.
   // This is the final precondition — after this, SSH transport can proceed
   // because the remote authorized_keys file contains our ephemeral public key.
   const stageResult = await stageTemporarySshKey(sshContext, keyResult.value);

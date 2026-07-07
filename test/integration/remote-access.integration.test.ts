@@ -121,8 +121,10 @@ describe("remote-access preconditions integration", () => {
       expect(result.error.message).toContain("remote access requires running instance");
     }
 
+    // Key material is resolved before the instance-state check (see REMOTE-DOMAIN-FORWARDAGENT),
+    // but SSM polling and key staging must still not occur once the instance is rejected.
+    expect(ensureSshKeyMaterialMock).toHaveBeenCalledTimes(1);
     expect(waitForSsmOnlineMock).not.toHaveBeenCalled();
-    expect(ensureSshKeyMaterialMock).not.toHaveBeenCalled();
     expect(stageTemporarySshKeyMock).not.toHaveBeenCalled();
   });
 
@@ -139,7 +141,45 @@ describe("remote-access preconditions integration", () => {
       expect(result.error.category).toBe("TimeoutError");
     }
 
-    expect(ensureSshKeyMaterialMock).not.toHaveBeenCalled();
+    // Key material is resolved before the SSM-readiness wait (see REMOTE-DOMAIN-FORWARDAGENT),
+    // but key staging must still not occur once SSM readiness times out.
+    expect(ensureSshKeyMaterialMock).toHaveBeenCalledTimes(1);
+    expect(stageTemporarySshKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues to instance verification when forwarding is requested and key material came from an agent", async () => {
+    traceSpec("REMOTE-DOMAIN-FORWARDAGENT", "REMOTE-FWDAGENT-READY");
+
+    ensureSshKeyMaterialMock.mockResolvedValueOnce(
+      ok({
+        privateKeyPath: "",
+        publicKeyPath: "",
+        publicKeyContent: "ssh-rsa AAAAB3...agent== user@host",
+        fromAgent: true,
+      }),
+    );
+
+    const result = await resolveRemoteAccessPreconditions(undefined, true);
+    expect(result.ok).toBe(true);
+
+    expect(describeInstanceMock).toHaveBeenCalledTimes(1);
+    expect(waitForSsmOnlineMock).toHaveBeenCalledTimes(1);
+    expect(stageTemporarySshKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects forwarding requests before any AWS or SSM interaction when key material was not agent-sourced", async () => {
+    traceSpec("REMOTE-DOMAIN-FORWARDAGENT", "REMOTE-FWDAGENT-FAIL");
+
+    // beforeEach's default ensureSshKeyMaterialMock already returns fromAgent: false.
+    const result = await resolveRemoteAccessPreconditions(undefined, true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.category).toBe("ValidationError");
+      expect(result.error.message).toContain("agent forwarding");
+    }
+
+    expect(describeInstanceMock).not.toHaveBeenCalled();
+    expect(waitForSsmOnlineMock).not.toHaveBeenCalled();
     expect(stageTemporarySshKeyMock).not.toHaveBeenCalled();
   });
 });

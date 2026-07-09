@@ -28,9 +28,17 @@ one sig Defaults {
   sshUser : lone SshUser
 }
 
-// Remote access session phases
+// Remote access session phases. Cleanup is not a distinct phase: cleanup is tracked by
+// the `cleanupScheduled` flag and can be scheduled on any Done/Failed terminal path.
 abstract sig Phase {}
-one sig Idle, Resolving, WaitingSSM, Staging, Transporting, Cleanup, Done, Failed extends Phase {}
+one sig Idle, Resolving, WaitingSSM, Staging, Transporting, Done, Failed extends Phase {}
+
+// Command kind for the invocation: `connect` opens an interactive session; `cp` is
+// upload-only. Fixed per invocation (non-`var`). Used to model the CLI-level rejection
+// of `cp --forward-agent` (REMOTE-FWDAGENT-CPREJECT); the rest of the flow is
+// command-agnostic.
+abstract sig CommandKind {}
+one sig Connect, Copy extends CommandKind {}
 
 one sig Session {
   var phase : one Phase,
@@ -41,7 +49,12 @@ one sig Session {
   var lastConnectUpdated : one Bool,
   // Not `var`: fixed for the modeled invocation (whether --forward-agent was passed
   // doesn't change over the course of one connect/cp session). See REMOTE-DOMAIN-FORWARDAGENT.
-  forwardAgentRequested : one Bool
+  forwardAgentRequested : one Bool,
+  // Not `var`: the command kind (connect vs cp) is fixed for the invocation.
+  command : one CommandKind,
+  // Not `var`: the invocation-time --ssh-user override, if any. Highest-precedence SSH-user
+  // input (REMOTE-CLI-SSHUSER), fixed for the invocation. See resolve_ssh_user.
+  sshUserOverride : lone SshUser
 }
 
 // Outcome vocabulary
@@ -53,8 +66,12 @@ one sig CommandResult {
   var exitCode : lone Int
 }
 
-// Current box selection
+// Current box selection. The CLI resolves a single current box before any remote-access
+// work; at most one box is current, and (per the transition frames) it never changes mid-flow.
 var sig current in Alias {}
+
+// A single invocation targets at most one current box.
+fact single_current_box { always lone current }
 
 // Remote path model for cp
 sig RemotePath {
@@ -238,6 +255,9 @@ pred resolve_key_material [a : Alias] {
   // Guard
   a in current
   Session.phase = Idle
+  // `cp --forward-agent` is rejected at the CLI before any remote-access setup begins
+  // (REMOTE-FWDAGENT-CPREJECT), so it never enters key-material resolution.
+  not (Session.command = Copy and forward_agent_requested)
   // Effect: advance to Resolving; key material chosen nondeterministically (agent availability)
   Session.phase' = Resolving
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
@@ -264,6 +284,7 @@ pred check_running [a : Alias] {
   a in current
   Session.phase = Resolving
   instance_running[a]
+  ssh_user_resolvable[Session.sshUserOverride, a]   // SSH user must resolve before proceeding (REMOTE-SSHUSER-FAIL)
   not forward_agent_dishonored   // forwarding gate takes priority (see REMOTE-DOMAIN-FORWARDAGENT)
   // Effect: advance to SSM waiting
   Session.phase' = WaitingSSM
@@ -350,7 +371,7 @@ pred ssm_timeout [a : Alias] {
   a in current
   Session.phase = WaitingSSM
   Session.ssmTicksRemaining = 0
-  a.instanceRef.ssmReady = False
+  not instance_ssm_ready[a]
   // Effect: TimeoutError
   Session.phase' = Failed
   Session.ssmTicksRemaining' = 0
@@ -461,10 +482,41 @@ pred ssh_user_unresolvable [invocation : lone SshUser, box : Alias] {
   no resolve_ssh_user[invocation, box]
 }
 
-// Safety: no key staging without resolved SSH user
+// Unresolvable SSH user: reject with ValidationError before staging (REMOTE-SSHUSER-FAIL).
+// Fires from Resolving, mirroring rejected_not_running; the forwarding gate takes priority
+// (guarded with `not forward_agent_dishonored`) so a dishonored request rejects first.
+pred rejected_ssh_user_unresolvable [a : Alias] {
+  // Guard
+  a in current
+  Session.phase = Resolving
+  ssh_user_unresolvable[Session.sshUserOverride, a]
+  not forward_agent_dishonored
+  // Effect: fail with ValidationError, no staging
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = ValidationError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: no key staging without a resolved SSH user. The antecedent uses the invocation's
+// actual override (sshUserOverride), so it is only unresolvable when override, per-box user,
+// and defaults are all absent.
 assert no_staging_without_ssh_user {
   always (all a : current |
-    ssh_user_unresolvable[none, a] implies Session.keyStaged' = False)
+    ssh_user_unresolvable[Session.sshUserOverride, a] implies Session.keyStaged' = False)
 }
 ```
 
@@ -557,10 +609,13 @@ assert last_connect_requires_both_successes {
     CommandResult.outcome' = Success))
 }
 
-// Safety: consistency error surfaces divergence
+// Safety: consistency error surfaces divergence. Scoped to the terminal failure transition:
+// mid-transport steps (e.g. cp_upload_done) also set transportStarted' = True while leaving
+// lastConnectUpdated' = False, but they do not end the session, so only a Failed outcome must
+// carry ConsistencyError.
 assert consistency_error_on_local_failure {
   always (
-    (Session.transportStarted' = True and Session.lastConnectUpdated' = False)
+    (Session.phase' = Failed and Session.transportStarted' = True and Session.lastConnectUpdated' = False)
       implies CommandResult.outcome' = ConsistencyError)
 }
 ```
@@ -801,12 +856,9 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 
 ```alloy
 // --- Session lifecycle: exit code propagation ---
-
-pred session_terminates [sshExit : Int] {
-  Session.phase = Done or Session.phase = Failed
-  // Exit code is propagated from SSH child
-  CommandResult.exitCode' = sshExit
-}
+// The model tracks that a completed session has a defined exit code (set by connect_success/
+// cp_success), rather than an undefined/leftover value. It abstracts over the concrete SSH
+// child exit value; what matters for the contract is that Done implies a propagated code.
 
 // Verifies exit code is set (not the tautology x' = x')
 assert exit_code_propagated {
@@ -830,7 +882,7 @@ WHEN the local source is a readable regular file of any size, THE devbox domain 
 
 ##### Evidence
 - Implementation: [ssh-cli.ts:187 validateLocalRegularFile()](/src/adapters/ssh-cli.ts#L187), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94)
-- Test: [ssh-cli.contract.test.ts:39 accepts regular files regardless of large size](/test/contract/ssh-cli.contract.test.ts#L39)
+- Test: [ssh-cli.contract.test.ts:57 accepts regular files regardless of large size](/test/contract/ssh-cli.contract.test.ts#L57)
 - Example:
 ```ts
 const { writeFile, unlink } = await import("node:fs/promises");
@@ -880,7 +932,7 @@ WHEN temporary SSH key staging succeeds, THE devbox adapter SHALL wait for stagi
 
 ##### Evidence
 - Implementation: [remote-access.ts:120 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L120), [ssh-cli.ts:362 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L362)
-- Test: [ssh-cli.contract.test.ts:94 stages temporary key via SSM with user home resolution, literal key, and bounded wait](/test/contract/ssh-cli.contract.test.ts#L94)
+- Test: [ssh-cli.contract.test.ts:112 stages temporary key via SSM with user home resolution, literal key, and bounded wait](/test/contract/ssh-cli.contract.test.ts#L112)
 - Test (integration): [remote-access.integration.test.ts:77 continues to staged transport setup when instance is running and SSM-ready](/test/integration/remote-access.integration.test.ts#L77)
 
 #### Scenario: Staging Failure Stops Transport [REMOTE-STAGE-FAIL]
@@ -890,7 +942,7 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 
 ##### Evidence
 - Implementation: [remote-access.ts:120 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L120), [ssh-cli.ts:362 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L362)
-- Test: [ssh-cli.contract.test.ts:135 reports transport error when key staging command fails](/test/contract/ssh-cli.contract.test.ts#L135), [ssh-cli.contract.test.ts:152 reports transport error when SSM wait for key staging times out](/test/contract/ssh-cli.contract.test.ts#L152)
+- Test: [ssh-cli.contract.test.ts:153 reports transport error when key staging command fails](/test/contract/ssh-cli.contract.test.ts#L153), [ssh-cli.contract.test.ts:170 reports transport error when SSM wait for key staging times out](/test/contract/ssh-cli.contract.test.ts#L170)
 
 #### Requirement model
 
@@ -972,7 +1024,7 @@ WHEN remote access is staged successfully, THE devbox adapter SHALL remove or sc
 
 ##### Evidence
 - Implementation: [ssh-cli.ts:362 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L362), [connect.ts:87 runConnectCommand()](/src/cli/commands/connect.ts#L87), [cp.ts:94 runCpCommand()](/src/cli/commands/cp.ts#L94), [ssh-cli.ts:715 cleanupLocalTempKeys()](/src/adapters/ssh-cli.ts#L715)
-- Test: [ssh-cli.contract.test.ts:174 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L174)
+- Test: [ssh-cli.contract.test.ts:192 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L192)
 - Test (integration): [remote-commands.integration.test.ts:77 connect updates lastConnectAt after a successful session](/test/integration/remote-commands.integration.test.ts#L77), [remote-commands.integration.test.ts:135 connect returns transport error details on local session failure and still cleans up](/test/integration/remote-commands.integration.test.ts#L135), [remote-commands.integration.test.ts:169 cp uploads to temp, finalizes, and updates lastConnectAt](/test/integration/remote-commands.integration.test.ts#L169)
 
 #### Scenario: Cleanup Failure Reported [REMOTE-CLEANUP-FAIL]
@@ -1032,7 +1084,7 @@ WHEN `ssh-add -l` reports available keys, THE devbox adapter SHALL use the first
 
 ##### Evidence
 - Implementation: [ssh-cli.ts:241 ensureSshKeyMaterial()](/src/adapters/ssh-cli.ts#L241)
-- Test: [ssh-cli.contract.test.ts:51 prefers ssh-agent key material when available and reads public key locally](/test/contract/ssh-cli.contract.test.ts#L51)
+- Test: [ssh-cli.contract.test.ts:69 prefers ssh-agent key material when available and reads public key locally](/test/contract/ssh-cli.contract.test.ts#L69)
 
 #### Scenario: Temporary Key Generated And Cleaned [REMOTE-KEY-TEMP]
 WHEN no agent key is available, THE devbox adapter SHALL generate a temporary keypair at `~/.ssh/ssm-ssh-tmp` and remove both files on process exit.
@@ -1041,7 +1093,7 @@ WHEN no agent key is available, THE devbox adapter SHALL generate a temporary ke
 
 ##### Evidence
 - Implementation: [ssh-cli.ts:241 ensureSshKeyMaterial()](/src/adapters/ssh-cli.ts#L241), [ssh-cli.ts:715 cleanupLocalTempKeys()](/src/adapters/ssh-cli.ts#L715)
-- Test: [ssh-cli.contract.test.ts:71 falls back to generated temporary key material when ssh-agent is unavailable](/test/contract/ssh-cli.contract.test.ts#L71), [ssh-cli.contract.test.ts:174 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L174)
+- Test: [ssh-cli.contract.test.ts:89 falls back to generated temporary key material when ssh-agent is unavailable](/test/contract/ssh-cli.contract.test.ts#L89), [ssh-cli.contract.test.ts:192 cleans up generated local temp keys](/test/contract/ssh-cli.contract.test.ts#L192)
 
 #### Scenario: Remote Key Removal Bounded [REMOTE-KEY-REMOTE-CLEANUP]
 WHEN a temporary SSH public key is staged on the remote instance, THE devbox adapter SHALL schedule a background removal job on the remote host that removes the key from `authorized_keys` after 15 seconds.
@@ -1050,7 +1102,7 @@ WHEN a temporary SSH public key is staged on the remote instance, THE devbox ada
 
 ##### Evidence
 - Implementation: [ssh-cli.ts:362 stageTemporarySshKey()](/src/adapters/ssh-cli.ts#L362)
-- Test: [ssh-cli.contract.test.ts:94 stages temporary key via SSM with user home resolution, literal key, and bounded wait](/test/contract/ssh-cli.contract.test.ts#L94)
+- Test: [ssh-cli.contract.test.ts:112 stages temporary key via SSM with user home resolution, literal key, and bounded wait](/test/contract/ssh-cli.contract.test.ts#L112)
 
 #### Requirement model
 
@@ -1119,10 +1171,65 @@ WHEN the user invokes `connect --forward-agent` together with `--ssh-user <user>
 
 **Postcondition:** The agent-forwarding request and the resolved SSH-user override are both available to the command.
 
+##### Evidence
+- Implementation: [index.ts:119 extractForwardAgentFlag()](/src/index.ts#L119), [index.ts:165 parseInvocation()](/src/index.ts#L165)
+- Test (integration): [connect-forward-agent.integration.test.ts:70 parses --forward-agent and --ssh-user in either order and threads both through](/test/integration/connect-forward-agent.integration.test.ts#L70)
+
 #### Scenario: Forward Agent Rejected On Copy [REMOTE-FWDAGENT-CPREJECT]
 IF the user invokes `cp` with `--forward-agent`, THEN THE devbox CLI SHALL reject the invocation as invalid before any remote-access setup begins.
 
 **Postcondition:** No staging, transport, or config update occurs.
+
+##### Evidence
+- Implementation: [index.ts:165 parseInvocation()](/src/index.ts#L165)
+- Test (integration): [connect-forward-agent.integration.test.ts:97 rejects --forward-agent on cp before any remote-access setup begins](/test/integration/connect-forward-agent.integration.test.ts#L97)
+
+#### Requirement model
+
+```alloy
+// --- CLI agent-forwarding flag: parsing independence + cp rejection ---
+
+// REMOTE-FWDAGENT-PARSE (order independence): the agent-forwarding request
+// (forwardAgentRequested) and the SSH-user override (sshUserOverride) are modeled as two
+// independent, non-`var` inputs on Session. Because they are structurally independent fields
+// with no ordering between them, a session may carry any combination of the two — mirroring a
+// CLI that accepts `--forward-agent` and `--ssh-user` in either order. The scenario_forward_agent_parse
+// witness (see commands) exhibits a run where both are present and thread through to success.
+
+// REMOTE-FWDAGENT-CPREJECT: `cp --forward-agent` is rejected at the CLI before any
+// remote-access setup begins. Fires from Idle and moves straight to Failed/ValidationError;
+// resolve_key_material is guarded to never start such an invocation, so no setup can occur.
+pred cp_forward_agent_rejected {
+  // Guard: cp invoked with --forward-agent
+  Session.command = Copy
+  forward_agent_requested
+  Session.phase = Idle
+  // Effect: immediate ValidationError, no setup
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = ValidationError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: `cp --forward-agent` never stages a key or starts transport.
+assert cp_forward_agent_never_sets_up {
+  always ((Session.command = Copy and forward_agent_requested)
+    implies (Session.keyStaged' = False and Session.transportStarted' = False))
+}
+```
 
 - - -
 
@@ -1141,10 +1248,18 @@ WHEN an agent-forwarding request is present and the resolved key material's sour
 
 **Postcondition:** Instance description, SSM readiness waiting, and key staging may proceed.
 
+##### Evidence
+- Implementation: [remote-access.ts:120 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L120)
+- Test (integration): [remote-access.integration.test.ts:150 continues to instance verification when forwarding is requested and key material came from an agent](/test/integration/remote-access.integration.test.ts#L150)
+
 #### Scenario: Forwarding Without Agent Key Rejected [REMOTE-FWDAGENT-FAIL]
 IF an agent-forwarding request is present and the resolved key material was generated locally rather than sourced from an agent, THEN THE devbox domain SHALL fail with `ValidationError` before describing the instance, waiting for SSM readiness, or staging any key.
 
 **Postcondition:** No AWS or SSM call occurs; no key is staged; no SSH session starts.
+
+##### Evidence
+- Implementation: [remote-access.ts:163 resolveRemoteAccessPreconditions()](/src/cli/remote-access.ts#L163)
+- Test (integration): [remote-access.integration.test.ts:170 rejects forwarding requests before any AWS or SSM interaction when key material was not agent-sourced](/test/integration/remote-access.integration.test.ts#L170)
 
 #### Requirement model
 
@@ -1221,15 +1336,27 @@ WHEN the interactive SSH session is started with an honored agent-forwarding req
 
 **Postcondition:** The remote host's `sshd`, if configured to allow it, exposes the forwarded agent socket to the session.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:548 startInteractiveSsh()](/src/adapters/ssh-cli.ts#L548), [connect.ts:87 runConnectCommand()](/src/cli/commands/connect.ts#L87)
+- Test: [ssh-cli.contract.test.ts:207 enables agent forwarding on the interactive session when requested, and omits it by default](/test/contract/ssh-cli.contract.test.ts#L207)
+
 #### Scenario: Copy Transport Never Forwards Agent [REMOTE-FWDAGENT-CPSAFE]
 WHEN `cp` uploads or finalizes a file, THE devbox SSH adapter SHALL NOT include the agent-forwarding option in the spawned `scp` or `ssh` invocation.
 
 **Postcondition:** `cp`'s transport arguments are unchanged from before this capability existed.
 
+##### Evidence
+- Implementation: [ssh-cli.ts:609 uploadFileOverScp()](/src/adapters/ssh-cli.ts#L609), [ssh-cli.ts:665 finalizeRemoteFile()](/src/adapters/ssh-cli.ts#L665)
+- Test: [ssh-cli.contract.test.ts:244 keeps cp's upload and finalize transport free of agent forwarding](/test/contract/ssh-cli.contract.test.ts#L244)
+
 #### Scenario: Remote Rejection Does Not Fail Connection [REMOTE-FWDAGENT-TOLERATE]
 IF the remote host's `sshd` refuses or ignores agent forwarding, THEN THE devbox SSH adapter SHALL still allow the interactive session to proceed without treating the refusal as a connection failure.
 
 **Postcondition:** `connect`'s exit code reflects the SSH session's own outcome, not the forwarding outcome.
+
+##### Evidence
+- Implementation: [ssh-cli.ts:548 startInteractiveSsh()](/src/adapters/ssh-cli.ts#L548)
+- Test: [ssh-cli.contract.test.ts:268 REVIEW: interactive session outcome is driven only by the ssh process's own exit, never by remote forwarding acceptance](/test/contract/ssh-cli.contract.test.ts#L268)
 
 #### Requirement model
 
@@ -1287,7 +1414,9 @@ pred init {
   CpState.cpPhase = CpUploading
   CpState.uploadedToTemp = False
   CpState.finalizedAtDest = False
-  all i : Instance | i.running = True and i.ssmReady = False
+  // Instances start not-yet-SSM-ready; `running` is free so the not-running rejection path
+  // (rejected_not_running / non_running_never_stages) is reachable. `running` never changes.
+  all i : Instance | i.ssmReady = False
 }
 
 fact transitions {
@@ -1296,6 +1425,7 @@ fact transitions {
     (some a : Alias | resolve_key_material[a])
     or (some a : Alias | check_running[a] or rejected_not_running[a])
     or (some a : Alias | rejected_forward_agent_dishonored[a])
+    or (some a : Alias | rejected_ssh_user_unresolvable[a])
     or (some a : Alias | ssm_poll_tick[a] or ssm_timeout[a])
     // Key staging
     or (some a : Alias | staging_success[a] or staging_failure[a])
@@ -1307,6 +1437,8 @@ fact transitions {
     or (some p : RemotePath | path_rejected[p])
     // No current box
     or remote_rejected_no_current
+    // cp --forward-agent rejected at the CLI (REMOTE-FWDAGENT-CPREJECT)
+    or cp_forward_agent_rejected
     // Key cleanup (issue 25: connected to transitions)
     or remove_temp_files_event
     // Stutter
@@ -1330,6 +1462,59 @@ run scenario_forward_agent_rejected {
   eventually (Session.phase = Failed and CommandResult.outcome = ValidationError and forward_agent_dishonored)
 } for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 8 steps
 
+// REMOTE-FWDAGENT-CPREJECT: `cp --forward-agent` fails with ValidationError without any setup.
+run scenario_cp_forward_agent_rejected {
+  Session.command = Copy
+  Session.forwardAgentRequested = True
+  eventually (Session.phase = Failed and CommandResult.outcome = ValidationError)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 6 steps
+
+// REMOTE-FWDAGENT-PARSE: a forwarding request and an SSH-user override coexist and thread
+// through to a successful (agent-honored) connect, independent of any ordering.
+run scenario_forward_agent_parse {
+  Session.command = Connect
+  Session.forwardAgentRequested = True
+  some Session.sshUserOverride
+  eventually (Session.phase = Done and CommandResult.outcome = Success)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 8 steps
+
+// REMOTE-PRECOND-FAIL: a not-running current instance is rejected with InstanceStateError.
+run scenario_not_running_rejected {
+  eventually (Session.phase = Failed and CommandResult.outcome = InstanceStateError
+    and (some a : current | instance_not_running[a]))
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 6 steps
+
+// REMOTE-SSHUSER-FAIL: an unresolvable SSH user is rejected with ValidationError before staging.
+run scenario_ssh_user_unresolvable_rejected {
+  eventually (Session.phase = Failed and CommandResult.outcome = ValidationError
+    and (some a : current | ssh_user_unresolvable[Session.sshUserOverride, a]))
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 6 steps
+
+// REMOTE-CONNECT-CONSISTENCY: external session start succeeds but the local commit fails.
+// Witnesses that the consistency_error_on_local_failure antecedent is reachable (non-vacuous).
+run scenario_connect_consistency_error {
+  eventually (Session.phase = Failed and CommandResult.outcome = ConsistencyError
+    and Session.transportStarted = True and Session.lastConnectUpdated = False)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps
+
+// REMOTE-CP-CONSISTENCY: remote finalize succeeds but the local commit fails.
+// Witnesses that the cp_consistency_surfaces_divergence antecedent is reachable (non-vacuous).
+run scenario_cp_consistency_error {
+  eventually (CpState.finalizedAtDest = True and CommandResult.outcome = ConsistencyError
+    and Session.lastConnectUpdated = False)
+} for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 12 steps
+
+// REMOTE-PATH-ACCEPT: a safe remote path does not block transport preparation.
+run scenario_safe_path_accepted {
+  some p : RemotePath | path_safe[p]
+  eventually Session.phase = Transporting
+} for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 12 steps
+
+// REMOTE-CLEANUP-SUCCESS: a staged-key session terminates with cleanup scheduled.
+run scenario_cleanup_performed {
+  eventually cleanup_performed
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps
+
 check no_transport_before_ssm_ready for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check transport_requires_staged_key for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check last_connect_requires_both_successes for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
@@ -1346,4 +1531,12 @@ check ssm_polling_terminates for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 7
 check no_staging_or_transport_without_honorable_forwarding for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check forward_agent_checked_before_instance_state for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check forwarding_sessions_use_agent_key for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check no_transport_without_current for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
+check non_running_never_stages for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check no_staging_without_ssh_user for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check consistency_error_on_local_failure for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check cp_consistency_surfaces_divergence for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check unsafe_path_never_reaches_remote for 2 Alias, 2 Instance, 2 SshUser, 2 RemotePath, 8 Int, 10 steps expect 0
+check staging_failure_blocks_transport for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check cp_forward_agent_never_sets_up for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 ```

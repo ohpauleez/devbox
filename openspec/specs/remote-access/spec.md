@@ -38,7 +38,10 @@ one sig Session {
   var keyStaged : one Bool,
   var transportStarted : one Bool,
   var cleanupScheduled : one Bool,
-  var lastConnectUpdated : one Bool
+  var lastConnectUpdated : one Bool,
+  // Not `var`: fixed for the modeled invocation (whether --forward-agent was passed
+  // doesn't change over the course of one connect/cp session). See REMOTE-DOMAIN-FORWARDAGENT.
+  forwardAgentRequested : one Bool
 }
 
 // Outcome vocabulary
@@ -226,12 +229,42 @@ pred instance_ssm_ready [a : Alias] {
   a.instanceRef.ssmReady = True
 }
 
+// Resolve local SSH key material (ensureSshKeyMaterial): its own step, before the running
+// check, matching real code order. Uses the Resolving phase (declared but previously unused).
+// KeyStore choice moved here from staging_success so forward_agent_dishonored — evaluated by
+// check_running/rejected_not_running/rejected_forward_agent_dishonored below — reads a value
+// resolved for *this* invocation, not a leftover from init or a prior invocation's staging.
+pred resolve_key_material [a : Alias] {
+  // Guard
+  a in current
+  Session.phase = Idle
+  // Effect: advance to Resolving; key material chosen nondeterministically (agent availability)
+  Session.phase' = Resolving
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = Session.keyStaged
+  Session.transportStarted' = Session.transportStarted
+  Session.cleanupScheduled' = Session.cleanupScheduled
+  Session.lastConnectUpdated' = Session.lastConnectUpdated
+  CommandResult.outcome' = CommandResult.outcome
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore: nondeterministic choice models agent availability
+  (KeyStore.source' = AgentKey and KeyStore.tempFilesExist' = False) or
+  (KeyStore.source' = TempKey and KeyStore.tempFilesExist' = True)
+}
+
 // Begin precondition check: verify instance is running
 pred check_running [a : Alias] {
   // Guard
   a in current
-  Session.phase = Idle
+  Session.phase = Resolving
   instance_running[a]
+  not forward_agent_dishonored   // forwarding gate takes priority (see REMOTE-DOMAIN-FORWARDAGENT)
   // Effect: advance to SSM waiting
   Session.phase' = WaitingSSM
   Session.ssmTicksRemaining' = 24   // 24 ticks * 5s = 2 minutes
@@ -255,8 +288,9 @@ pred check_running [a : Alias] {
 // Instance not running: immediate rejection
 pred rejected_not_running [a : Alias] {
   a in current
-  Session.phase = Idle
+  Session.phase = Resolving
   instance_not_running[a]
+  not forward_agent_dishonored   // forwarding gate takes priority (see REMOTE-DOMAIN-FORWARDAGENT)
   // Effect: fail with InstanceStateError
   Session.phase' = Failed
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
@@ -862,8 +896,8 @@ IF temporary SSH key staging fails, THEN THE devbox adapter SHALL fail with `Tra
 
 ```alloy
 // --- Key staging: staging must complete before transport ---
-// KeyStore events are integrated into staging_success
-// (agent key vs temp key is determined nondeterministically at staging time)
+// KeyStore is resolved earlier, in resolve_key_material (REMOTE-DOMAIN-PRECOND) — by the time
+// Staging is reached, KeyStore.source already reflects this invocation's resolved key material.
 
 pred staging_success [a : Alias] {
   a in current
@@ -883,9 +917,9 @@ pred staging_success [a : Alias] {
   CpState.cpPhase' = CpState.cpPhase
   CpState.uploadedToTemp' = CpState.uploadedToTemp
   CpState.finalizedAtDest' = CpState.finalizedAtDest
-  // KeyStore: nondeterministic choice models agent availability
-  (KeyStore.source' = AgentKey and KeyStore.tempFilesExist' = False) or
-  (KeyStore.source' = TempKey and KeyStore.tempFilesExist' = True)
+  // KeyStore frame (already resolved in resolve_key_material, not re-chosen here)
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
 }
 
 pred staging_failure [a : Alias] {
@@ -972,7 +1006,7 @@ assert cleanup_always_scheduled_after_staging {
 // Liveness with explicit fairness premise
 pred session_progress_fairness {
   always (
-    Session.phase in (Idle + WaitingSSM + Staging + Transporting)
+    Session.phase in (Idle + Resolving + WaitingSSM + Staging + Transporting)
       implies eventually Session.phase in (Done + Failed))
 }
 
@@ -1052,12 +1086,14 @@ assert agent_key_no_temp_files {
   always (KeyStore.source = AgentKey implies KeyStore.tempFilesExist = False)
 }
 
-// Fairness covers entire path: transport completes AND cleanup fires
+// Fairness covers entire path: session completes AND cleanup fires
+// Uses session_progress_fairness rather than a Transporting-only clause: since
+// resolve_key_material can set tempFilesExist=True as early as Resolving (before
+// Transporting), progress out of every in-progress phase must be guaranteed, not just
+// Transporting — otherwise a trace stuck in Resolving forever would vacuously satisfy
+// a narrower premise while temp files are never cleaned up.
 pred temp_cleanup_fairness {
-  // Transport must eventually complete when in progress
-  always (
-    (Session.phase = Transporting and Session.keyStaged = True)
-      implies eventually (Session.phase in (Done + Failed)))
+  session_progress_fairness
   // Cleanup fires when session is complete and temp files exist
   always (
     (KeyStore.tempFilesExist = True and Session.phase in (Done + Failed))
@@ -1110,6 +1146,63 @@ IF an agent-forwarding request is present and the resolved key material was gene
 
 **Postcondition:** No AWS or SSM call occurs; no key is staged; no SSH session starts.
 
+#### Requirement model
+
+```alloy
+// --- Agent forwarding precondition: honored iff resolved key material is agent-sourced ---
+
+pred forward_agent_requested {
+  Session.forwardAgentRequested = True
+}
+
+pred forward_agent_dishonored {
+  forward_agent_requested
+  KeyStore.source != AgentKey
+}
+
+// Fires from Resolving (right after resolve_key_material, REMOTE-DOMAIN-PRECOND), before any
+// AWS/SSM interaction (describeInstance, waitForSsmOnline, stageTemporarySshKey). Mirrors
+// remote_rejected_no_current / rejected_not_running. check_running / rejected_not_running are
+// guarded with `not forward_agent_dishonored` so this rejection takes priority when both apply.
+pred rejected_forward_agent_dishonored [a : Alias] {
+  // Guard
+  a in current
+  Session.phase = Resolving
+  forward_agent_dishonored
+  // Effect: immediate ValidationError, no AWS/SSM interaction, no staging
+  Session.phase' = Failed
+  Session.ssmTicksRemaining' = Session.ssmTicksRemaining
+  Session.keyStaged' = False
+  Session.transportStarted' = False
+  Session.cleanupScheduled' = False
+  Session.lastConnectUpdated' = False
+  CommandResult.outcome' = ValidationError
+  CommandResult.exitCode' = CommandResult.exitCode
+  current' = current
+  all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
+  // CpState frame
+  CpState.cpPhase' = CpState.cpPhase
+  CpState.uploadedToTemp' = CpState.uploadedToTemp
+  CpState.finalizedAtDest' = CpState.finalizedAtDest
+  // KeyStore frame
+  KeyStore.source' = KeyStore.source
+  KeyStore.tempFilesExist' = KeyStore.tempFilesExist
+}
+
+// Safety: a dishonored forwarding request never reaches key staging or transport
+assert no_staging_or_transport_without_honorable_forwarding {
+  always (forward_agent_dishonored implies
+    (Session.keyStaged' = False and Session.transportStarted' = False))
+}
+
+// Safety: the forwarding gate takes priority over the running-instance checks —
+// check_running/rejected_not_running never fire for a dishonored forwarding request
+assert forward_agent_checked_before_instance_state {
+  always (all a : Alias |
+    forward_agent_dishonored implies not (check_running[a] or rejected_not_running[a]))
+}
+```
+
 - - -
 
 **Adapter Layer:** SSH/SCP process invocation.
@@ -1137,6 +1230,25 @@ WHEN `cp` uploads or finalizes a file, THE devbox SSH adapter SHALL NOT include 
 IF the remote host's `sshd` refuses or ignores agent forwarding, THEN THE devbox SSH adapter SHALL still allow the interactive session to proceed without treating the refusal as a connection failure.
 
 **Postcondition:** `connect`'s exit code reflects the SSH session's own outcome, not the forwarding outcome.
+
+#### Requirement model
+
+```alloy
+// --- Interactive session forwarding: adapter-level guarantee ---
+// The adapter has no independent state for "-A was passed to ssh" — its correctness
+// instead rests on a derived invariant: by the time a forwarding-requested session
+// reaches Staging/Transporting, the domain-level gate (REMOTE-DOMAIN-FORWARDAGENT) has
+// already guaranteed the key material is agent-sourced, so it is always safe for
+// startInteractiveSsh to add -A unconditionally once execution gets this far.
+// Remote-side rejection of forwarding (REMOTE-FWDAGENT-TOLERATE) is not modeled: it is
+// not observable from the client and has no effect on any tracked Session/CommandResult state.
+
+assert forwarding_sessions_use_agent_key {
+  always (
+    (forward_agent_requested and Session.phase in (Staging + Transporting))
+      implies KeyStore.source = AgentKey)
+}
+```
 
 ## State machine and invariant checks
 
@@ -1181,7 +1293,9 @@ pred init {
 fact transitions {
   init and always (
     // Precondition checks
-    (some a : Alias | check_running[a] or rejected_not_running[a])
+    (some a : Alias | resolve_key_material[a])
+    or (some a : Alias | check_running[a] or rejected_not_running[a])
+    or (some a : Alias | rejected_forward_agent_dishonored[a])
     or (some a : Alias | ssm_poll_tick[a] or ssm_timeout[a])
     // Key staging
     or (some a : Alias | staging_success[a] or staging_failure[a])
@@ -1212,6 +1326,10 @@ run scenario_cp_success {
   eventually (CpState.cpPhase = CpDone and CpState.finalizedAtDest = True)
 } for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 12 steps
 
+run scenario_forward_agent_rejected {
+  eventually (Session.phase = Failed and CommandResult.outcome = ValidationError and forward_agent_dishonored)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 8 steps
+
 check no_transport_before_ssm_ready for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check transport_requires_staged_key for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check last_connect_requires_both_successes for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
@@ -1225,4 +1343,7 @@ check agent_key_no_temp_files for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 
 check staged_keys_eventually_cleaned for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 20 steps
 check temp_files_eventually_removed for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 15 steps
 check ssm_polling_terminates for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 7 Int, 15 steps
+check no_staging_or_transport_without_honorable_forwarding for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check forward_agent_checked_before_instance_state for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
+check forwarding_sessions_use_agent_key for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 ```

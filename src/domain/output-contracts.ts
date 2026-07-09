@@ -88,7 +88,7 @@ export function renderHelp(version: string): CommandOutput {
       "  switch <alias>             Set current alias",
       "  up                         Start current instance",
       "  down                       Stop current instance",
-      "  connect [--ssh-user <u>]   Connect to current instance",
+      "  connect [--ssh-user <u>] [--forward-agent]  Connect to current instance",
       "  cp [--ssh-user <u>] <l> <r>  Upload local file",
       "",
       "Top-level flags:",

@@ -28,15 +28,16 @@ one sig Defaults {
   sshUser : lone SshUser
 }
 
-// Remote access session phases. Cleanup is not a distinct phase: cleanup is tracked by
-// the `cleanupScheduled` flag and can be scheduled on any Done/Failed terminal path.
+// Remote access session phases.
+// Cleanup is not a distinct phase: cleanup is tracked by the `cleanupScheduled` flag
+// and can be scheduled on any Done/Failed terminal path.
 abstract sig Phase {}
 one sig Idle, Resolving, WaitingSSM, Staging, Transporting, Done, Failed extends Phase {}
 
-// Command kind for the invocation: `connect` opens an interactive session; `cp` is
-// upload-only. Fixed per invocation (non-`var`). Used to model the CLI-level rejection
-// of `cp --forward-agent` (REMOTE-FWDAGENT-CPREJECT); the rest of the flow is
-// command-agnostic.
+// Command kind for the invocation:
+// `connect` opens an interactive session; `cp` is upload-only.
+// Used to model the CLI-level rejection of `cp --forward-agent` (REMOTE-FWDAGENT-CPREJECT);
+// the rest of the flow is command-agnostic.
 abstract sig CommandKind {}
 one sig Connect, Copy extends CommandKind {}
 
@@ -47,13 +48,9 @@ one sig Session {
   var transportStarted : one Bool,
   var cleanupScheduled : one Bool,
   var lastConnectUpdated : one Bool,
-  // Not `var`: fixed for the modeled invocation (whether --forward-agent was passed
-  // doesn't change over the course of one connect/cp session). See REMOTE-DOMAIN-FORWARDAGENT.
   forwardAgentRequested : one Bool,
-  // Not `var`: the command kind (connect vs cp) is fixed for the invocation.
   command : one CommandKind,
-  // Not `var`: the invocation-time --ssh-user override, if any. Highest-precedence SSH-user
-  // input (REMOTE-CLI-SSHUSER), fixed for the invocation. See resolve_ssh_user.
+  // Highest-precedence SSH-user input (REMOTE-CLI-SSHUSER), fixed for the invocation. See resolve_ssh_user.
   sshUserOverride : lone SshUser
 }
 
@@ -66,8 +63,9 @@ one sig CommandResult {
   var exitCode : lone Int
 }
 
-// Current box selection. The CLI resolves a single current box before any remote-access
-// work; at most one box is current, and (per the transition frames) it never changes mid-flow.
+// Current box selection.
+// The CLI resolves a single current box before any remote-access work;
+// at most one box is current, and it never changes mid-flow (set as a frame condition).
 var sig current in Alias {}
 
 // A single invocation targets at most one current box.
@@ -246,11 +244,9 @@ pred instance_ssm_ready [a : Alias] {
   a.instanceRef.ssmReady = True
 }
 
-// Resolve local SSH key material (ensureSshKeyMaterial): its own step, before the running
-// check, matching real code order. Uses the Resolving phase (declared but previously unused).
-// KeyStore choice moved here from staging_success so forward_agent_dishonored — evaluated by
-// check_running/rejected_not_running/rejected_forward_agent_dishonored below — reads a value
-// resolved for *this* invocation, not a leftover from init or a prior invocation's staging.
+// Resolve local SSH key material (ensureSshKeyMaterial):
+// This is a dedicated step in the lifecycle/state machine before the 'running'
+// check (the code implements the exact same state machine, in the same order).
 pred resolve_key_material [a : Alias] {
   // Guard
   a in current
@@ -282,7 +278,7 @@ pred resolve_key_material [a : Alias] {
 pred check_running [a : Alias] {
   // Guard
   a in current
-  Session.phase = Resolving
+  Session.phase = Resolving  // forces SSH key material to be checked first, which transitions to 'Resolving'
   instance_running[a]
   ssh_user_resolvable[Session.sshUserOverride, a]   // SSH user must resolve before proceeding (REMOTE-SSHUSER-FAIL)
   not forward_agent_dishonored   // forwarding gate takes priority (see REMOTE-DOMAIN-FORWARDAGENT)
@@ -482,9 +478,10 @@ pred ssh_user_unresolvable [invocation : lone SshUser, box : Alias] {
   no resolve_ssh_user[invocation, box]
 }
 
-// Unresolvable SSH user: reject with ValidationError before staging (REMOTE-SSHUSER-FAIL).
-// Fires from Resolving, mirroring rejected_not_running; the forwarding gate takes priority
-// (guarded with `not forward_agent_dishonored`) so a dishonored request rejects first.
+// Unresolvable SSH user:
+// reject with ValidationError before staging (REMOTE-SSHUSER-FAIL).
+// This transition follows from the initial 'Resolving' state,
+// after the 'forwarding agent' checks have successfully passed.
 pred rejected_ssh_user_unresolvable [a : Alias] {
   // Guard
   a in current
@@ -511,7 +508,8 @@ pred rejected_ssh_user_unresolvable [a : Alias] {
   KeyStore.tempFilesExist' = KeyStore.tempFilesExist
 }
 
-// Safety: no key staging without a resolved SSH user. The antecedent uses the invocation's
+// Safety: no key staging without a resolved SSH user.
+// The antecedent uses the invocation's
 // actual override (sshUserOverride), so it is only unresolvable when override, per-box user,
 // and defaults are all absent.
 assert no_staging_without_ssh_user {
@@ -609,10 +607,11 @@ assert last_connect_requires_both_successes {
     CommandResult.outcome' = Success))
 }
 
-// Safety: consistency error surfaces divergence. Scoped to the terminal failure transition:
-// mid-transport steps (e.g. cp_upload_done) also set transportStarted' = True while leaving
-// lastConnectUpdated' = False, but they do not end the session, so only a Failed outcome must
-// carry ConsistencyError.
+// Safety: consistency error surfaces divergence.
+// Scoped only to total failure states:
+// Mid-transport steps (e.g. cp_upload_done) also set transportStarted' = True while leaving
+// lastConnectUpdated' = False, but they do not end the session,
+// so only a Failed outcome must carry ConsistencyError.
 assert consistency_error_on_local_failure {
   always (
     (Session.phase' = Failed and Session.transportStarted' = True and Session.lastConnectUpdated' = False)
@@ -1138,12 +1137,11 @@ assert agent_key_no_temp_files {
   always (KeyStore.source = AgentKey implies KeyStore.tempFilesExist = False)
 }
 
-// Fairness covers entire path: session completes AND cleanup fires
+// Fairness covers entire path: session completes AND cleanup fires.
 // Uses session_progress_fairness rather than a Transporting-only clause: since
-// resolve_key_material can set tempFilesExist=True as early as Resolving (before
-// Transporting), progress out of every in-progress phase must be guaranteed, not just
-// Transporting — otherwise a trace stuck in Resolving forever would vacuously satisfy
-// a narrower premise while temp files are never cleaned up.
+// resolve_key_material can set tempFilesExist=True as early as Resolving (before Transporting),
+// progress out of every in-progress phase must be guaranteed, not just Transporting,
+// otherwise a trace stuck in Resolving forever would vacuously satisfy a narrower premise while temp files are never cleaned up.
 pred temp_cleanup_fairness {
   session_progress_fairness
   // Cleanup fires when session is complete and temp files exist
@@ -1189,15 +1187,17 @@ IF the user invokes `cp` with `--forward-agent`, THEN THE devbox CLI SHALL rejec
 ```alloy
 // --- CLI agent-forwarding flag: parsing independence + cp rejection ---
 
-// REMOTE-FWDAGENT-PARSE (order independence): the agent-forwarding request
+// Parsing argments is order independence. The agent-forwarding request
 // (forwardAgentRequested) and the SSH-user override (sshUserOverride) are modeled as two
-// independent, non-`var` inputs on Session. Because they are structurally independent fields
-// with no ordering between them, a session may carry any combination of the two — mirroring a
-// CLI that accepts `--forward-agent` and `--ssh-user` in either order. The scenario_forward_agent_parse
-// witness (see commands) exhibits a run where both are present and thread through to success.
+// independent inputs on Session.
+// Because they are structurally independent fields with no ordering between them,
+// a session may carry any combination of the two,
+// mirroring a CLI that accepts `--forward-agent` and `--ssh-user` in either order.
+// The scenario_forward_agent_parse witness (see commands) exhibits a run where both are present and thread through to success.
 
 // REMOTE-FWDAGENT-CPREJECT: `cp --forward-agent` is rejected at the CLI before any
-// remote-access setup begins. Fires from Idle and moves straight to Failed/ValidationError;
+// remote-access setup begins.
+// Fires from Idle and moves straight to Failed/ValidationError;
 // resolve_key_material is guarded to never start such an invocation, so no setup can occur.
 pred cp_forward_agent_rejected {
   // Guard: cp invoked with --forward-agent

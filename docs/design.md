@@ -193,7 +193,7 @@ This split matters for assurance. The more the decision logic is isolated from t
 | **Domain core** ([`src/domain/`](../src/domain/)) | Pure, deterministic functions -- state decisions, parsing, validation | Zero I/O; injectable `Clock` for time; fully testable in isolation |
 | **Config store** ([`src/adapters/config-store.ts`](../src/adapters/config-store.ts)) | Atomic config persistence with advisory locking | Write protocol: write-temp -> fsync -> rename -> dir-fsync |
 | **AWS CLI adapter** ([`src/adapters/aws-cli.ts`](../src/adapters/aws-cli.ts)) | Subprocess calls to `aws ec2` / `aws ssm` | argv-only execution; 10 MiB buffer cap; no shell interpolation |
-| **SSH adapter** ([`src/adapters/ssh-cli.ts`](../src/adapters/ssh-cli.ts)) | Key material management, SSM-backed SSH sessions, SCP uploads | Ephemeral keys with signal-safe cleanup |
+| **SSH adapter** ([`src/adapters/ssh-cli.ts`](../src/adapters/ssh-cli.ts)) | Key material management, SSM-backed SSH sessions, SCP uploads, opt-in agent forwarding on interactive sessions | Ephemeral keys with signal-safe cleanup |
 | **Process adapter** ([`src/adapters/process.ts`](../src/adapters/process.ts)) | Safe `child_process.execFile` wrapper | ENOENT -> `DependencyError`; non-zero exit -> `TransportError` |
 
 ### 3.3 Design Principles
@@ -490,7 +490,7 @@ This is a top-level allowlist, not a complete nested schema. Unknown fields and 
 | `switch` | Alias exists in registry | `current` updated to target alias | `ValidationError`, `ConfigError` |
 | `up` | `current` set, instance in {stopped, stopping, pending, running} | Instance in `running` state | `ConfigError`, `NotFoundError`, `InstanceStateError`, `TimeoutError`, `AwsCliError` |
 | `down` | `current` set, instance in {running, stopping, stopped} | Instance in `stopped` state | `ConfigError`, `NotFoundError`, `InstanceStateError`, `TimeoutError`, `AwsCliError` |
-| `connect` | Full remote-access precondition chain satisfied | Interactive SSH session established (exit code passthrough) | `ConfigError`, `NotFoundError`, `InstanceStateError`, `TimeoutError`, `TransportError`, `ConsistencyError` |
+| `connect` | Full remote-access precondition chain satisfied; if `--forward-agent`, resolved key material must come from a local agent | Interactive SSH session established (exit code passthrough); agent forwarding enabled when requested | `ValidationError`, `ConfigError`, `NotFoundError`, `InstanceStateError`, `TimeoutError`, `TransportError`, `ConsistencyError` |
 | `cp` | Full remote-access precondition chain + valid local/remote paths | File uploaded atomically to remote destination | `ValidationError`, `ConfigError`, `NotFoundError`, `InstanceStateError`, `TimeoutError`, `TransportError`, `ConsistencyError` |
 
 **Spec references:**
@@ -836,7 +836,11 @@ stateDiagram-v2
     ResolveCurrentBox --> Failure: no current box
     ResolveCurrentBox --> ResolveSshUser
     ResolveSshUser --> Failure: no SSH user resolved
-    ResolveSshUser --> VerifyInstanceState
+    ResolveSshUser --> EnsureKeyMaterial
+    EnsureKeyMaterial --> TransportFailure: key material unavailable
+    EnsureKeyMaterial --> CheckForwardAgent
+    CheckForwardAgent --> Failure: --forward-agent requested but key not agent-sourced
+    CheckForwardAgent --> VerifyInstanceState
     VerifyInstanceState --> Failure: stale or non-running instance
     VerifyInstanceState --> WaitForSsm
     WaitForSsm --> TimeoutFailure: not ready within 2 minutes
@@ -854,12 +858,21 @@ stateDiagram-v2
     ConsistencyFailure --> [*]
 ```
 
+Key-material resolution (`EnsureKeyMaterial`) runs before any AWS or SSM
+interaction. This ordering exists so that an unsatisfiable agent-forwarding
+request (`CheckForwardAgent`) fails with `ValidationError` before any instance
+describe, SSM wait, or key staging occurs. The forwarding gate applies to
+`connect --forward-agent` only; `cp` never requests forwarding and passes
+through `CheckForwardAgent` unconditionally.
+
 #### Decision Table
 
 | Gate | Requirement | Failure |
 |---|---|---|
 | current box | `current` resolves to a tracked alias | validation failure |
 | SSH user | resolved from invocation override, then box override, then defaults | validation failure |
+| key material | local SSH key material is available (agent key preferred, else generated) | `TransportError` |
+| agent forwarding | if `--forward-agent`, resolved key material came from a local agent | `ValidationError` (before any AWS/SSM call) |
 | instance state | AWS describe returns `running` instance in active context | `NotFoundError` or `InstanceStateError` |
 | SSM readiness | becomes `Online` within 2 minutes | `TimeoutError` |
 | key staging | temporary authorization staged successfully | `TransportError` |
@@ -870,6 +883,7 @@ These transitions are invalid because they would bypass required validation gate
 
 - `ResolveCurrentBox -> StartTransport` -- bypasses all gates
 - `ResolveSshUser -> StartTransport` -- bypasses state verification
+- `EnsureKeyMaterial -> VerifyInstanceState` when `--forward-agent` was requested but the key is not agent-sourced -- bypasses the forwarding gate (must fail before any AWS/SSM call)
 - `VerifyInstanceState -> StartTransport` -- bypasses SSM readiness and key staging
 - `WaitForSsm -> StartTransport` -- bypasses key staging
 
@@ -886,14 +900,17 @@ These transitions are invalid because they would bypass required validation gate
 | RA-1 | no transport starts before the target is running, SSM-ready, and staged for temporary access |
 | RA-2 | missing SSH user fails before any staging or transport begins |
 | RA-3 | `lastConnectAt` is updated only after external success and local commit success |
+| RA-4 | key-material resolution occurs before any AWS/SSM interaction, so an unsatisfiable `--forward-agent` request fails with `ValidationError` before any instance describe, SSM wait, or key staging |
+| RA-5 | agent forwarding is opt-in per invocation, never persisted or inferred, and does not change which key authenticates the SSM-tunneled hop |
 
 #### Safety and Liveness
 
 - Safety: unsafe or incomplete precondition chains never reach SSH or SCP transport.
 - Safety: staging failure blocks all transport.
+- Safety: a `--forward-agent` request that cannot be honored (no agent-sourced key) never reaches AWS describe, SSM wait, key staging, or transport.
 - Liveness: remote access proceeds if the target is running and becomes SSM-ready within `SSM_WAIT_TIMEOUT_MS`.
 
-**Spec reference:** [`remote-access`](../openspec/specs/remote-access/spec.md)
+**Spec reference:** [`remote-access`](../openspec/specs/remote-access/spec.md) -- see `[REMOTE-CLI-FORWARDAGENT]`, `[REMOTE-DOMAIN-FORWARDAGENT]`, `[REMOTE-ADAPTER-FORWARDAGENT]`.
 
 ### 6.8 `cp` Transfer and Finalization
 
@@ -1117,21 +1134,24 @@ sequenceDiagram
     participant SSH as SSH Adapter
     participant H as Remote Host
 
-    U->>C: devbox connect [--ssh-user user]
+    U->>C: devbox connect [--ssh-user user] [--forward-agent]
     C->>S: load config
     S-->>C: committed config
     C->>D: resolve current box and ssh user
+    D->>SSH: ensure key material (agent key preferred)
+    SSH-->>D: key material (records whether agent-sourced)
+    D->>D: if --forward-agent and key not agent-sourced, fail ValidationError before any AWS call
     D->>A: describe instance and poll SSM readiness
     A->>EC2: aws ec2 describe-instances / aws ssm checks
     EC2-->>A: running and Online
     A-->>D: normalized ready state
-    D->>SSH: ensure key material and stage temporary key
+    D->>SSH: stage temporary key
     SSH->>EC2: send SSM-backed key staging command
     EC2->>H: install temporary key and cleanup job
     SSH->>EC2: ssm wait command-executed (bounded)
     EC2-->>SSH: staging confirmed
     SSH-->>D: transport ready
-    D->>SSH: start interactive SSH over SSM
+    D->>SSH: start interactive SSH over SSM (with -A when forwarding)
     SSH->>H: establish session
     alt session startup and local commit succeed
         SSH-->>D: startup success
@@ -1151,6 +1171,8 @@ sequenceDiagram
 Protocol rules:
 
 - every boundary crossing is gated by explicit preconditions and normalized results
+- local SSH key material is resolved before any AWS/SSM call, so an unsatisfiable `--forward-agent` request fails before remote-access setup begins
+- agent forwarding (`ssh -A`) is enabled on the interactive session only when explicitly requested and its precondition holds
 - the SSH session exit code is propagated rather than hidden behind unconditional success
 - temporary authorization is staged before transport and bounded for cleanup
 
@@ -1175,11 +1197,13 @@ sequenceDiagram
     C->>S: load config
     S-->>C: committed config
     C->>D: validate local file, current box, ssh user, and remote path
+    D->>SSH: ensure key material (agent key preferred)
+    SSH-->>D: key material
     D->>A: describe instance and poll SSM readiness
     A->>EC2: AWS readiness calls
     EC2-->>A: running and Online
     A-->>D: ready
-    D->>SSH: ensure key material and stage temporary key
+    D->>SSH: stage temporary key
     SSH->>EC2: staging command
     EC2->>H: authorize temporary key
     H-->>SSH: staging complete
@@ -1208,6 +1232,7 @@ Protocol rules:
 - the final destination path is not touched until the temporary upload is complete
 - remote success followed by failed local metadata commit is treated as explicit divergence
 - local source files are validated before any remote transport setup begins
+- `cp` never enables SSH agent forwarding; its upload and finalize transport is unaffected by the forwarding option
 
 ---
 
@@ -1436,6 +1461,9 @@ Relevant specs: [`distribution`](../openspec/specs/distribution/spec.md)
 | local secrets scope | the tool does not manage AWS credentials, profiles, or regions |
 | temporary key handling | agent keys are preferred; generated keys are cleaned up locally; remote entries are bounded for cleanup |
 | staged-key lifetime | remote cleanup job removes the authorized-key entry after 15 seconds |
+| SSH agent forwarding | opt-in per `connect` invocation only; never persisted or inferred; excluded from `cp` |
+| forwarded-agent trust boundary | during a forwarded session a malicious process on the remote host can request signatures from the local agent for the session's duration; private key material never leaves the local machine |
+| forwarding preconditions | `--forward-agent` requires a local agent with a loaded identity and fails fast (`ValidationError`) before any AWS/SSM call otherwise |
 | error rendering | normalized summaries do not expose secrets as part of the first-line message |
 | polling bounds | EC2: 5 minutes / 5s intervals; SSM: 2 minutes / 5s intervals |
 | signal handling | aborts waits without rolling back already-submitted AWS state transitions |
@@ -1510,7 +1538,7 @@ Relevant specs: [`distribution`](../openspec/specs/distribution/spec.md)
 | Informational | `--help`, `--version`, bare `devbox` dispatch | local process only | [`box-registry`](../openspec/specs/box-registry/spec.md), [`distribution`](../openspec/specs/distribution/spec.md) |
 | Box Registry | `list`, `init`, `add`, `rm`, `switch` | config store, optional AWS | [`box-registry`](../openspec/specs/box-registry/spec.md) |
 | Instance Lifecycle | `up`, `down` | config store, AWS | [`instance-lifecycle`](../openspec/specs/instance-lifecycle/spec.md) |
-| Remote Access | `connect`, `cp` | config store, AWS, SSM, SSH/SCP, remote host | [`remote-access`](../openspec/specs/remote-access/spec.md) |
+| Remote Access | `connect` (optional agent forwarding), `cp` | config store, AWS, SSM, SSH/SCP, remote host | [`remote-access`](../openspec/specs/remote-access/spec.md) |
 | Distribution | `npm` install, `dist/devbox.js` | packaging and runtime contract | [`distribution`](../openspec/specs/distribution/spec.md) |
 | Spec Traceability | `traceSpec(...)`, `test:trace` | spec catalog, test harness | [`spec-traceability`](../openspec/specs/spec-traceability/spec.md) |
 

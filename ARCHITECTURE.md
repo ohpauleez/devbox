@@ -63,11 +63,13 @@ The important split is between deterministic decision-making in `src/domain/` an
 
 This is the place to start when you want to understand top-level CLI behavior:
 
-- raw argv parsing
+- raw argv parsing, including extracting the `connect`-only `--forward-agent` flag
 - dispatch to a command handler
 - top-level `--help` and `--version` fast paths
 - final stdout/stderr writing
 - mapping structured errors to fixed process exit codes
+
+The module only self-invokes `runCli` when it is the actual process entrypoint (guarded by an `isMainModule` check), so importing it for its exports — as the tests do with `runCli` — does not trigger a real CLI run.
 
 If you need to add a new command, change parsing rules, or adjust the global CLI contract, start here.
 
@@ -86,7 +88,7 @@ This directory is organized primarily by command surface:
 - `switch.ts`: changes the current selected alias without contacting AWS
 - `up.ts`: ensures the current instance reaches `running`
 - `down.ts`: ensures the current instance reaches `stopped`
-- `connect.ts`: establishes an interactive SSH session to the current box after the remote-access preconditions are satisfied
+- `connect.ts`: establishes an interactive SSH session to the current box after the remote-access preconditions are satisfied, optionally enabling SSH agent forwarding (`--forward-agent`)
 - `cp.ts`: uploads a local file to the current box using the same remote-access path
 
 The command handlers are the best place to look when you are asking “where is the end-to-end flow for command X?”.
@@ -100,10 +102,13 @@ It centralizes the precondition chain for remote access:
 - load config
 - resolve current box
 - resolve SSH user
+- ensure local SSH key material exists
+- if agent forwarding was requested, require that the key material came from a local agent
 - verify the EC2 instance exists and is running
 - wait for SSM readiness
-- ensure local SSH key material exists
 - stage temporary remote SSH authorization
+
+Key-material resolution runs *before* any AWS/SSM interaction so that an unsatisfiable agent-forwarding request fails fast — no instance description, no SSM wait, no key staged.
 
 If remote-access behavior changes, start here before touching `connect.ts` or `cp.ts`.
 
@@ -190,9 +195,11 @@ It owns:
 - local SSH key material selection or generation
 - temporary key staging on the remote machine
 - SSH/SCP argv construction for SSM-backed transport
-- interactive SSH startup
+- interactive SSH startup, including opt-in agent forwarding (`-A`) for `connect`
 - SCP upload and cleanup helpers
 - local temp-key cleanup, including signal-aware cleanup support
+
+Agent forwarding is only ever added to the interactive `connect` argv; the shared `cp` transport builder never forwards.
 
 If remote transport behavior changes, this is the main boundary to inspect.
 
@@ -331,6 +338,7 @@ These are the most important things to preserve when changing the code.
 - Remote access requires a running instance and bounded SSM readiness.
 - Temporary SSH authorization must be staged and cleaned up rather than silently becoming permanent.
 - `lastConnectAt` is updated only after external success and local commit success.
+- Agent forwarding is opt-in per `connect` invocation, requires a local agent with a loaded identity, and is rejected for `cp`.
 
 ### Destructive-Action Rules
 

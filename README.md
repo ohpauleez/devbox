@@ -18,7 +18,7 @@ Canonical project docs:
 At a high level it supports:
 - local box registry management: `list`, `init`, `add`, `rm`, `switch`
 - EC2 lifecycle control: `up`, `down`
-- remote access: `connect`, `cp`
+- remote access: `connect` (with optional SSH agent forwarding), `cp`
 - distribution parity across the npm-installed CLI and the bundled artifact
 
 For the full design rationale, see [docs/design.md](docs/design.md).
@@ -34,6 +34,7 @@ Runtime requirements:
 Notes:
 - `devbox` does not manage AWS credentials, profiles, or regions for you.
 - Local registry state is stored in `~/.config/devbox.json`.
+- `devbox connect --forward-agent` additionally requires a running `ssh-agent` with at least one loaded identity; it fails fast (`ValidationError`) otherwise.
 
 Build and packaging:
 - compiled CLI entrypoint: `dist/src/index.js`
@@ -60,7 +61,7 @@ devbox [command]
 | `devbox switch <alias>` | Set the current alias |
 | `devbox up` | Start the current instance |
 | `devbox down` | Stop the current instance |
-| `devbox connect [--ssh-user <user>]` | Connect to the current instance |
+| `devbox connect [--ssh-user <user>] [--forward-agent]` | Connect to the current instance (optionally forwarding the local SSH agent) |
 | `devbox cp [--ssh-user <user>] <local> <remote>` | Upload one local file to the current instance |
 | `devbox --help` | Show help |
 | `devbox --version` | Show version |

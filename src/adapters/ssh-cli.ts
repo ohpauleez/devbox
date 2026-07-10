@@ -511,6 +511,11 @@ function commonSshArgs(context: SshContext, key: StagedKey): string[] {
  *
  * @param context - SSH connection context (instance id and user).
  * @param key - Staged key material for authentication.
+ * @param forwardAgent - When `true`, enable SSH agent forwarding (`-A`) for this
+ *   session so remote processes can request signatures from the local agent.
+ *   Defaults to `false` (no change from prior behavior). Callers are responsible
+ *   for ensuring forwarding preconditions (a local agent with a loaded identity)
+ *   were already validated — this function does not re-check them.
  * @returns On success (`ok`): the SSH process exit code (0 for clean exit).
  *   On error (`err`): `DependencyError` when `ssh` is not found on `$PATH`;
  *   `TransportError` on spawn failure or signal termination without an exit code.
@@ -520,6 +525,11 @@ function commonSshArgs(context: SshContext, key: StagedKey): string[] {
  * Postcondition: on success, the returned code is the SSH process exit status.
  * The child process inherits stdio (interactive terminal session).
  * Ownership: the caller is responsible for key cleanup after the session ends.
+ * Agent forwarding is scoped to this function only — `commonSshArgs()` (shared
+ * with {@link uploadFileOverScp} and {@link finalizeRemoteFile}) is never modified,
+ * so `cp`'s transport is unaffected regardless of `forwardAgent`. If the remote
+ * host's `sshd` refuses or ignores agent forwarding, the session still proceeds —
+ * that condition is not detectable from the client side.
  *
  * @throws Never throws. All failures are captured in the returned Result.
  *
@@ -528,6 +538,7 @@ function commonSshArgs(context: SshContext, key: StagedKey): string[] {
  * const result = await startInteractiveSsh(
  *   { instanceId: "i-0123abc", sshUser: "ec2-user" },
  *   stagedKey,
+ *   true,
  * );
  * if (result.ok && result.value !== 0) {
  *   console.error(`SSH exited with code ${result.value}`);
@@ -537,9 +548,11 @@ function commonSshArgs(context: SshContext, key: StagedKey): string[] {
 export async function startInteractiveSsh(
   context: SshContext,
   key: StagedKey,
+  forwardAgent = false,
 ): Promise<Result<number, RemoteTransportError>> {
   const args = [
     ...commonSshArgs(context, key),
+    ...(forwardAgent ? ["-A"] : []),
     `${context.sshUser}@${context.instanceId}`,
   ];
 

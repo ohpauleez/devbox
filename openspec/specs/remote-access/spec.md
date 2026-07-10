@@ -63,6 +63,19 @@ one sig CommandResult {
   var exitCode : lone Int
 }
 
+// Stable process exit codes (see docs/design.md#81-error-categories-and-exit-codes).
+// Each outcome this state machine can produce maps to exactly one code, and the codes are
+// stable across versions. Categories 3-6 (Config/Dependency/AwsCli/NotFound) belong to layers
+// this remote-access flow abstracts as always-succeeding, so they are not modeled here.
+fun exit_code_for [o : Outcome] : Int {
+  (o = Success)                 implies 0
+  else (o = ValidationError)    implies 2
+  else (o = InstanceStateError) implies 7
+  else (o = TimeoutError)       implies 8
+  else (o = ConsistencyError)   implies 9
+  else 10   // TransportError
+}
+
 // Current box selection.
 // The CLI resolves a single current box before any remote-access work;
 // at most one box is current, and it never changes mid-flow (set as a frame condition).
@@ -166,7 +179,7 @@ pred remote_rejected_no_current {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = InstanceStateError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[InstanceStateError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -316,7 +329,7 @@ pred rejected_not_running [a : Alias] {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = InstanceStateError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[InstanceStateError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -376,7 +389,7 @@ pred ssm_timeout [a : Alias] {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = TimeoutError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[TimeoutError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -496,7 +509,7 @@ pred rejected_ssh_user_unresolvable [a : Alias] {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = ValidationError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ValidationError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -563,7 +576,7 @@ pred connect_success [a : Alias] {
   Session.keyStaged' = Session.keyStaged
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = Success
-  CommandResult.exitCode' = 0
+  CommandResult.exitCode' = exit_code_for[Success]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -588,7 +601,7 @@ pred connect_consistency_error [a : Alias] {
   Session.keyStaged' = Session.keyStaged
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = ConsistencyError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ConsistencyError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -694,7 +707,7 @@ pred cp_success [a : Alias] {
   Session.keyStaged' = Session.keyStaged
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = Success
-  CommandResult.exitCode' = 0
+  CommandResult.exitCode' = exit_code_for[Success]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // KeyStore frame
@@ -719,7 +732,7 @@ pred cp_consistency_error [a : Alias] {
   Session.keyStaged' = Session.keyStaged
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = ConsistencyError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ConsistencyError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // KeyStore frame
@@ -809,7 +822,7 @@ pred path_rejected [p : RemotePath] {
   Session.lastConnectUpdated' = False
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = ValidationError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ValidationError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -855,14 +868,26 @@ WHEN the SSH session terminates, THE devbox connect process SHALL exit with the 
 
 ```alloy
 // --- Session lifecycle: exit code propagation ---
-// The model tracks that a completed session has a defined exit code (set by connect_success/
-// cp_success), rather than an undefined/leftover value. It abstracts over the concrete SSH
-// child exit value; what matters for the contract is that Done implies a propagated code.
+// The model tracks that a settled session (Done or Failed) has a defined exit code, set by the
+// terminal predicates via exit_code_for, rather than an undefined/leftover value.
+//
+// Abstraction boundary: on the success path the real `connect` execs into / waits on the SSH
+// child and passes its exit status straight through (OpenSSH returns the remote command's exit
+// status, or 255 on an internal SSH/connection error). The model collapses that passthrough to
+// the stable code 0 for Success; what matters for the contract is that a settled session always
+// carries a propagated, outcome-consistent code.
 
-// Verifies exit code is set (not the tautology x' = x')
+// Verifies exit code is set on every settled phase (not the tautology x' = x')
 assert exit_code_propagated {
   always (
-    Session.phase' = Done implies some CommandResult.exitCode')
+    Session.phase' in (Done + Failed) implies some CommandResult.exitCode')
+}
+
+// Verifies the propagated code always matches the outcome per docs/design.md#81.
+assert exit_code_matches_outcome {
+  always (
+    some CommandResult.outcome implies
+      CommandResult.exitCode = exit_code_for[CommandResult.outcome])
 }
 ```
 
@@ -984,7 +1009,7 @@ pred staging_failure [a : Alias] {
   Session.lastConnectUpdated' = False
   Session.ssmTicksRemaining' = Session.ssmTicksRemaining
   CommandResult.outcome' = TransportError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[TransportError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -1212,7 +1237,7 @@ pred cp_forward_agent_rejected {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = ValidationError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ValidationError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -1292,7 +1317,7 @@ pred rejected_forward_agent_dishonored [a : Alias] {
   Session.cleanupScheduled' = False
   Session.lastConnectUpdated' = False
   CommandResult.outcome' = ValidationError
-  CommandResult.exitCode' = CommandResult.exitCode
+  CommandResult.exitCode' = exit_code_for[ValidationError]
   current' = current
   all i : Instance | i.running' = i.running and i.ssmReady' = i.ssmReady
   // CpState frame
@@ -1510,6 +1535,12 @@ run scenario_safe_path_accepted {
   eventually Session.phase = Transporting
 } for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 12 steps
 
+// REMOTE-SESSION-EXIT: an error path settles with the outcome's stable exit code (7 = instance state).
+run scenario_error_exit_code {
+  eventually (Session.phase = Failed and CommandResult.outcome = InstanceStateError
+    and CommandResult.exitCode = 7)
+} for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 6 steps
+
 // REMOTE-CLEANUP-SUCCESS: a staged-key session terminates with cleanup scheduled.
 run scenario_cleanup_performed {
   eventually cleanup_performed
@@ -1524,6 +1555,7 @@ check cleanup_always_scheduled_after_staging for 2 Alias, 2 Instance, 2 SshUser,
 check cp_no_partial_destination for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
 check no_artificial_size_limit for 1 Alias, 1 Instance, 1 SshUser, 1 RemotePath, 8 Int, 10 steps expect 0
 check exit_code_propagated for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps expect 0
+check exit_code_matches_outcome for 2 Alias, 2 Instance, 2 SshUser, 1 RemotePath, 8 Int, 15 steps expect 0
 check agent_key_no_temp_files for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 10 steps expect 0
 check staged_keys_eventually_cleaned for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 20 steps
 check temp_files_eventually_removed for 1 Alias, 1 Instance, 1 SshUser, 0 RemotePath, 8 Int, 15 steps

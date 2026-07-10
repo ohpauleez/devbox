@@ -50,7 +50,8 @@ test:
 .PHONY : dist
 dist:
 	@$(NPM) run build \
-	&& $(NPM) run smoke:parity
+	&& $(NPM) run smoke:parity \
+	&& chmod +x dist/devbox.js
 
 .PHONY : run
 run:
